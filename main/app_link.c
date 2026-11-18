@@ -194,8 +194,9 @@ static void build_main(lv_obj_t *p)
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     for (int i = 0; i < ACT_COUNT; i++) {
         s_acts[i] = ui_pill(row, k_act_names[i], C_TEXT2, C_SURFACE);
-        lv_obj_set_style_pad_hor(s_acts[i], 10, 0);
-        lv_obj_set_style_pad_ver(s_acts[i], 4, 0);
+        lv_obj_set_style_text_font(s_acts[i], &ui_font_14, 0);
+        lv_obj_set_style_pad_hor(s_acts[i], 9, 0);
+        lv_obj_set_style_pad_ver(s_acts[i], 5, 0);
     }
     render_partner();
     render_log();

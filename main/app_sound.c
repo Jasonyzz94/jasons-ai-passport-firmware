@@ -93,11 +93,11 @@ static void build_spectrum(lv_obj_t *p)
     lv_obj_t *card = ui_card(p, UI_PAD, 4, UI_W - 2 * UI_PAD, 84, C_SURFACE, 16);
     s_db = ui_label(card, ui_font_64b, C_TEXT, "--");
     lv_obj_align(s_db, LV_ALIGN_LEFT_MID, 12, 2);
-    s_db_unit = ui_label(card, &ui_font_16, C_SOUND, "分贝");
+    s_db_unit = ui_label(card, &ui_font_14, C_SOUND, "分贝");
     lv_obj_align_to(s_db_unit, s_db, LV_ALIGN_OUT_RIGHT_BOTTOM, 4, -12);
-    s_db_desc = ui_label_w(card, &ui_font_14, C_TEXT2, 96, LV_TEXT_ALIGN_RIGHT, "");
+    s_db_desc = ui_label_w(card, &ui_font_14, C_TEXT2, 76, LV_TEXT_ALIGN_RIGHT, "");
     lv_obj_align(s_db_desc, LV_ALIGN_TOP_RIGHT, -12, 18);
-    s_peak = ui_label_w(card, &ui_font_14, C_TEXT3, 96, LV_TEXT_ALIGN_RIGHT, "");
+    s_peak = ui_label_w(card, &ui_font_14, C_TEXT3, 76, LV_TEXT_ALIGN_RIGHT, "");
     lv_obj_align(s_peak, LV_ALIGN_TOP_RIGHT, -12, 44);
 
     const int area_w = UI_W - 2 * UI_PAD;
@@ -139,7 +139,7 @@ static void tick_spectrum(void)
     if (a.peak_db > s_peak_db) s_peak_db = a.peak_db;
     lv_label_set_text_fmt(s_db, "%d", (int)lroundf(s_db_smooth));
     lv_label_set_text(s_db_desc, loudness_desc(s_db_smooth));
-    lv_label_set_text_fmt(s_peak, "峰值 %d 分贝", (int)lroundf(s_peak_db));
+    lv_label_set_text_fmt(s_peak, "最高 %d", (int)lroundf(s_peak_db));
     lv_obj_align_to(s_db_unit, s_db, LV_ALIGN_OUT_RIGHT_BOTTOM, 4, -12);
 }
 

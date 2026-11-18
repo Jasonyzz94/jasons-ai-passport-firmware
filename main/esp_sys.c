@@ -72,13 +72,13 @@ esp_err_t sys_esp_init(void)
     s_battery_ok = bsp_battery_init() == ESP_OK;
     s_keys = xQueueCreate(16, sizeof(key_msg_t));
     if (!s_keys) return ESP_ERR_NO_MEM;
-    const esp_err_t err = bsp_button_init(on_key, NULL);
-    if (err == ESP_OK && s_key_guard.armed) {
+    const esp_err_t btn_err = bsp_button_init(on_key, NULL);
+    if (btn_err == ESP_OK && s_key_guard.armed) {
         // 唤醒键若在按键驱动启动前已松手,不会产生 release 事件,按真实电压同步撤防。
         key_guard_sync_released(&s_key_guard, bsp_button_read_mv() >= BSP_BTN_MV_RELEASED_MIN);
     }
     s_input_ready = true;
-    return err;
+    return btn_err;
 }
 
 bool sys_key_pop(sys_key_t *key, sys_key_ev_t *ev)

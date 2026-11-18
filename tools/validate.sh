@@ -142,6 +142,12 @@ run_static_checks() {
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_firmware.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_archive_firmware.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_install_passport_skills.py
+    # 中转服务器测试需要 aiohttp/anthropic(server/requirements.txt);没装时跳过并明确报告。
+    if "${SERVER_PYTHON:-python3}" -c "import aiohttp, anthropic" 2>/dev/null; then
+        PYTHONDONTWRITEBYTECODE=1 "${SERVER_PYTHON:-python3}" -m unittest discover -s server/tests -q
+    else
+        echo "Server tests: SKIPPED (install server/requirements.txt or set SERVER_PYTHON)"
+    fi
     rm -rf "${test_dir}"
     echo "Host tests: PASS"
     if [[ "${actionlint_skipped}" == 1 ]]; then

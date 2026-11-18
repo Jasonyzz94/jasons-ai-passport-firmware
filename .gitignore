@@ -14,3 +14,7 @@ managed_components/
 
 # macOS
 .DS_Store
+
+# 中转服务器本地配置(含密钥)与缓存
+/server/config.toml
+__pycache__/
