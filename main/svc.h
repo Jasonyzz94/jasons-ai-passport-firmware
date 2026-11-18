@@ -66,6 +66,8 @@ bool net_portal_start(void);
 void net_portal_stop(void);
 portal_state_t net_portal_state(void);
 const char *net_portal_ssid(void);   // 例 "Passport-A3F2"
+// 手机在配置页提交后返回 true 并拷出内容(只返回一次);空字段表示未填写。
+bool net_portal_take(char ssid[33], char pass[65], char server[96], char tz[48]);
 
 // ===========================================================================
 // 中转服务器(Mac mini)
@@ -151,6 +153,8 @@ ble_state_t ble_hid_state(void);
 const char *ble_hid_peer(void);
 void ble_hid_key(uint8_t keycode, uint8_t modifiers);   // 按下 + 抬起
 void ble_hid_consumer(uint16_t usage);                  // 按下 + 抬起
+// 逐字键入 ASCII 文本(非 ASCII 字符跳过;中文需要电脑输入法,HID 无法直接发送)。
+void ble_hid_type(const char *ascii);
 void ble_hid_forget(void);                              // 清除配对
 
 // ===========================================================================

@@ -68,7 +68,7 @@ static void render_weather(void)
 {
     cJSON *root = cJSON_Parse(s_cache);
     if (!root) {
-        card_message(&IC_CLOUD_OFF, "天气数据异常", "稍后按 OK 重试");
+        card_message(&IC_CLOUD_OFF, "天气数据异常", "稍后按确定键重试");
         return;
     }
     lv_obj_clean(s_card);
@@ -125,11 +125,11 @@ static void update_status(void)
         return;
     }
     if (!settings_has_wifi()) {
-        card_message(&IC_CLOUD_OFF, "还没连 Wi-Fi", "在 设置 › Wi-Fi 配网 里用手机配置");
+        card_message(&IC_CLOUD_OFF, "还没连接无线网络", "在 设置 › 无线网络 里用手机配置");
     } else if (net_state() != NET_CONNECTED) {
         card_message(&WX_CLOUD, "正在联网…", NULL);
     } else if (relay_state() != SRV_OK) {
-        card_message(&IC_CLOUD_OFF, "找不到中转服务器", "请在 Mac mini 上启动 passport-server");
+        card_message(&IC_CLOUD_OFF, "找不到中转服务器", "请在家里电脑上启动中转服务");
     } else {
         card_message(&WX_CLOUD, "正在获取天气…", NULL);
     }
@@ -273,7 +273,7 @@ static void tick(int64_t now)
         relay_free(s_req);
         s_req = -1;
         s_cache_ms = now - REFRESH_MS + 60000;   // 1 分钟后重试
-        if (!s_cache[0] && !s_night) card_message(&IC_CLOUD_OFF, "获取天气失败", "按 OK 重试");
+        if (!s_cache[0] && !s_night) card_message(&IC_CLOUD_OFF, "获取天气失败", "按确定键重试");
     }
 }
 

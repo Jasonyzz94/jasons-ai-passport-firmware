@@ -102,8 +102,7 @@ static void render(void)
                                     s_aps[i].ssid[0] ? s_aps[i].ssid : "(隐藏网络)");
         lv_obj_align(name, LV_ALIGN_LEFT_MID, 36, 0);
         char meta[24];
-        snprintf(meta, sizeof(meta), "%s%d · %d", s_aps[i].secure ? "" : LV_SYMBOL_WARNING " ",
-                 s_aps[i].channel, s_aps[i].rssi);
+        snprintf(meta, sizeof(meta), "%s%d 信道", s_aps[i].secure ? "" : "开放 · ", s_aps[i].channel);
         lv_obj_t *m = ui_label(row, &ui_font_14, C_TEXT3, meta);
         lv_obj_align(m, LV_ALIGN_RIGHT_MID, -10, 0);
     }
@@ -194,7 +193,7 @@ static void tick(int64_t now)
 }
 
 const app_t APP_WIFI = {
-    .name = "Wi-Fi 分析",
+    .name = "无线分析",
     .desc = "信道占用 · 信号强度",
     .icon = &ICON_WIFI,
     .color = C_WIFI,

@@ -93,7 +93,7 @@ static void build_spectrum(lv_obj_t *p)
     lv_obj_t *card = ui_card(p, UI_PAD, 4, UI_W - 2 * UI_PAD, 84, C_SURFACE, 16);
     s_db = ui_label(card, ui_font_64b, C_TEXT, "--");
     lv_obj_align(s_db, LV_ALIGN_LEFT_MID, 12, 2);
-    s_db_unit = ui_label(card, &ui_font_16, C_SOUND, "dB");
+    s_db_unit = ui_label(card, &ui_font_16, C_SOUND, "分贝");
     lv_obj_align_to(s_db_unit, s_db, LV_ALIGN_OUT_RIGHT_BOTTOM, 4, -12);
     s_db_desc = ui_label_w(card, &ui_font_14, C_TEXT2, 96, LV_TEXT_ALIGN_RIGHT, "");
     lv_obj_align(s_db_desc, LV_ALIGN_TOP_RIGHT, -12, 18);
@@ -139,7 +139,7 @@ static void tick_spectrum(void)
     if (a.peak_db > s_peak_db) s_peak_db = a.peak_db;
     lv_label_set_text_fmt(s_db, "%d", (int)lroundf(s_db_smooth));
     lv_label_set_text(s_db_desc, loudness_desc(s_db_smooth));
-    lv_label_set_text_fmt(s_peak, "峰值 %d dB", (int)lroundf(s_peak_db));
+    lv_label_set_text_fmt(s_peak, "峰值 %d 分贝", (int)lroundf(s_peak_db));
     lv_obj_align_to(s_db_unit, s_db, LV_ALIGN_OUT_RIGHT_BOTTOM, 4, -12);
 }
 
@@ -170,7 +170,7 @@ static void build_tuner(lv_obj_t *p)
     lv_obj_t *sharp = ui_label(p, &ui_font_14, C_TEXT3, "偏高");
     lv_obj_align(sharp, LV_ALIGN_TOP_RIGHT, -DIAL_X + 4, DIAL_Y + 34);
     s_needle = ui_card(p, UI_W / 2 - 3, DIAL_Y - 10, 6, 40, C_TEXT3, 3);
-    s_tune_hint = ui_label(p, &ui_font_14, C_TEXT3, "标准音 A4 = 440 Hz");
+    s_tune_hint = ui_label(p, &ui_font_14, C_TEXT3, "标准音 A4 = 440 赫兹");
     lv_obj_align(s_tune_hint, LV_ALIGN_TOP_MID, 0, DIAL_Y + 56);
     s_cents_smooth = 0;
     s_last_pitch_ms = 0;
@@ -200,7 +200,7 @@ static void tick_tuner(int64_t now)
     lv_label_set_text_fmt(s_oct, "%d", n.octave);
     lv_obj_align(s_note, LV_ALIGN_TOP_MID, -8, 14);
     lv_obj_align_to(s_oct, s_note, LV_ALIGN_OUT_RIGHT_BOTTOM, 2, -6);
-    lv_label_set_text_fmt(s_hz, "%d.%d Hz", (int)a.pitch_hz, (int)(a.pitch_hz * 10) % 10);
+    lv_label_set_text_fmt(s_hz, "%d.%d 赫兹", (int)a.pitch_hz, (int)(a.pitch_hz * 10) % 10);
     lv_label_set_text_fmt(s_cents, in_tune ? "准了" : "%+d 音分", (int)lroundf(s_cents_smooth));
     lv_obj_set_style_text_color(s_cents, ui_c(color), 0);
     const int x = DIAL_X + (int)((s_cents_smooth + 50) * DIAL_W / 100) - 3;
@@ -211,12 +211,12 @@ static void tick_tuner(int64_t now)
 // ---------------------------------------------------------------------------
 static const char *tempo_name(int bpm)
 {
-    if (bpm < 60) return "广板 Largo";
-    if (bpm < 76) return "柔板 Adagio";
-    if (bpm < 108) return "行板 Andante";
-    if (bpm < 120) return "中板 Moderato";
-    if (bpm < 168) return "快板 Allegro";
-    return "急板 Presto";
+    if (bpm < 60) return "广板 · 很慢";
+    if (bpm < 76) return "柔板 · 慢";
+    if (bpm < 108) return "行板 · 稍慢";
+    if (bpm < 120) return "中板 · 中速";
+    if (bpm < 168) return "快板 · 快";
+    return "急板 · 很快";
 }
 
 static void metro_render(void)
@@ -236,7 +236,7 @@ static void build_metro(lv_obj_t *p)
     lv_obj_t *card = ui_card(p, UI_PAD, 6, UI_W - 2 * UI_PAD, 150, C_SURFACE, 20);
     s_bpm_lbl = ui_label(card, ui_font_64b, C_TEXT, "");
     lv_obj_align(s_bpm_lbl, LV_ALIGN_TOP_MID, 0, 18);
-    lv_obj_t *u = ui_label(card, &ui_font_14, C_TEXT3, "BPM");
+    lv_obj_t *u = ui_label(card, &ui_font_14, C_TEXT3, "每分钟拍数");
     lv_obj_align(u, LV_ALIGN_TOP_MID, 0, 92);
     s_tempo_lbl = ui_label(card, &ui_font_16, C_SOUND, "");
     lv_obj_align(s_tempo_lbl, LV_ALIGN_TOP_MID, 0, 114);

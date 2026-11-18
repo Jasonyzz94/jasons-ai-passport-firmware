@@ -98,13 +98,22 @@ void sim_scenario(void (*shot)(const char *), void (*key)(sys_key_t, sys_key_ev_
 
     // ---- 遥控 ----
     open_app(&APP_REMOTE);
-    shot("70_remote");
-    LONG(OK);
-    shot("71_remote_media");
-    g_fake.ble = BLE_ADVERTISING;
+    shot("70_remote_modes");
+    CLICK(OK);
+    shot("71_remote_vibe");
+    key(OK, SYS_EV_DOUBLE);
+    CLICK(DOWN); CLICK(DOWN);
+    shot("72_remote_phrases");
     LONG(UP);
+    LONG(UP);
+    CLICK(DOWN);
+    CLICK(OK);
+    shot("73_remote_slides");
+    LONG(UP);
+    LONG(UP);
+    g_fake.ble = BLE_ADVERTISING;
     open_app(&APP_REMOTE);
-    shot("72_remote_pairing");
+    shot("74_remote_pairing");
     g_fake.ble = BLE_OFF;
     LONG(UP);
 

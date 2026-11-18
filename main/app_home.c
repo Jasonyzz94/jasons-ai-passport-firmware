@@ -73,10 +73,10 @@ static void build_list(void)
     lv_obj_clean(s_body);
     if (!s_count) {
         if (relay_state() != SRV_OK) {
-            ui_empty(s_body, &IC_CLOUD_OFF, "找不到中转服务器", "智能家居经 Mac mini 转发");
+            ui_empty(s_body, &IC_CLOUD_OFF, "找不到中转服务器", "智能家居经家里的服务器转发");
         } else {
             ui_empty(s_body, &ICON_HOME, s_req >= 0 ? "正在加载…" : "没有设备",
-                     s_req >= 0 ? NULL : "在服务器配置 Home Assistant");
+                     s_req >= 0 ? NULL : "在服务器里配置家庭助手");
         }
         s_built = false;
         return;

@@ -66,6 +66,7 @@ bool net_portal_start(void) { return true; }
 void net_portal_stop(void) {}
 portal_state_t net_portal_state(void) { return g_fake.portal; }
 const char *net_portal_ssid(void) { return "Passport-A3F2"; }
+bool net_portal_take(char a[33], char b[65], char c[96], char d[48]) { (void)a; (void)b; (void)c; (void)d; return false; }
 
 // ---- 中转服务器 ----
 srv_state_t relay_state(void) { return g_fake.srv; }
@@ -174,6 +175,7 @@ ble_state_t ble_hid_state(void) { return g_fake.ble; }
 const char *ble_hid_peer(void) { return "Jason 的 MacBook"; }
 void ble_hid_key(uint8_t k, uint8_t m) { (void)k; (void)m; }
 void ble_hid_consumer(uint16_t u) { (void)u; }
+void ble_hid_type(const char *t) { (void)t; }
 void ble_hid_forget(void) {}
 
 // ---- 互联 ----

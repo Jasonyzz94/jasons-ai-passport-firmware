@@ -76,7 +76,7 @@ static void build_list(lv_obj_t *p)
     lv_obj_t *t = ui_label(p, &ui_font_20b, C_TEXT, "设置");
     lv_obj_set_pos(t, UI_PAD + 4, 4);
     ui_list_create(&s_list, p, UI_PAD, 36, UI_W - 2 * UI_PAD, UI_CONTENT_H - 40, C_SETTINGS);
-    ui_list_add(&s_list, &ICON_WIFI, "Wi-Fi 配网", "", true);
+    ui_list_add(&s_list, &ICON_WIFI, "无线网络", "", true);
     ui_list_add(&s_list, &ICON_BOARD, "中转服务器", "", false);
     ui_list_add(&s_list, &IC_STAR, "亮度", "", false);
     ui_list_add(&s_list, &IC_MUSIC, "音量", "", false);
@@ -102,7 +102,7 @@ static void portal_render(void)
     case PORTAL_CLIENT:
         snprintf(qr, sizeof(qr), "http://192.168.4.1");
         lv_label_set_text(s_step, "② 扫码打开配置页");
-        lv_label_set_text(s_portal_status, "手机已连上,填写家里的 Wi-Fi");
+        lv_label_set_text(s_portal_status, "手机已连上,填写家里的无线网络");
         break;
     case PORTAL_SAVED:
         snprintf(qr, sizeof(qr), "http://192.168.4.1");
@@ -159,15 +159,15 @@ static void about_render(void)
     char buf[360];
     const int64_t up = sys_now_ms() / 1000;
     snprintf(buf, sizeof(buf),
-             "设备名  %s\n固件    v%s\nMAC     %02X:%02X:%02X:%02X:%02X:%02X\n"
-             "IP      %s\n服务器  %s\n电池    %d%% · %d mV\n内存    %u / %u KB\n"
+             "设备名  %s\n固件    %s 版\n硬件码  %02X%02X%02X%02X%02X%02X\n"
+             "地址    %s\n服务器  %s\n电池    %d%% · %d 毫伏\n内存    空闲 %u 千字节\n"
              "运行    %d 小时 %d 分",
              g_settings.name, SYS_FW_VERSION, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
              net_state() == NET_CONNECTED ? net_ip() : "未联网",
              relay_state() == SRV_OK ? (strstr(relay_url(), "://") ? strstr(relay_url(), "://") + 3
                                                                    : relay_url()) : srv_text(),
              sys_battery_soc(), sys_battery_mv(), (unsigned)(sys_free_heap() / 1024),
-             (unsigned)(sys_largest_block() / 1024), (int)(up / 3600), (int)(up / 60 % 60));
+             (int)(up / 3600), (int)(up / 60 % 60));
     lv_label_set_text(s_about, buf);
 }
 
@@ -176,7 +176,7 @@ static void build_about(lv_obj_t *p)
     lv_obj_t *head = ui_box(p, UI_PAD, 4, UI_W - 2 * UI_PAD, 40);
     lv_obj_t *icon = ui_pix(head, &ICON_GEAR, 2);
     lv_obj_align(icon, LV_ALIGN_LEFT_MID, 2, 0);
-    lv_obj_t *t = ui_label(head, &ui_font_20b, C_TEXT, "Passport 工具箱");
+    lv_obj_t *t = ui_label(head, &ui_font_20b, C_TEXT, "随身工具箱");
     lv_obj_align(t, LV_ALIGN_LEFT_MID, 44, 0);
     lv_obj_t *card = ui_card(p, UI_PAD, 50, UI_W - 2 * UI_PAD, 200, C_SURFACE, 16);
     s_about = ui_label(card, &ui_font_14, C_TEXT2, "");
@@ -314,7 +314,7 @@ static bool key(sys_key_t k, sys_key_ev_t ev)
     case ROW_ABOUT: build(PAGE_ABOUT); break;
     case ROW_RESTART: shell_confirm("重启设备?", NULL, restart_answer); break;
     default:
-        shell_confirm("恢复出厂设置?", "Wi-Fi、配对、统计等全部清除并重启", reset_answer);
+        shell_confirm("恢复出厂设置?", "网络、配对、统计等全部清除并重启", reset_answer);
         break;
     }
     return true;
@@ -324,11 +324,23 @@ static void tick(int64_t now)
 {
     static int64_t last;
     if (s_kind == PAGE_PORTAL) {
+        char ssid[33], pass[65], server[96], tz[48];
+        if (net_portal_take(ssid, pass, server, tz)) {
+            snprintf(g_settings.wifi_ssid, sizeof(g_settings.wifi_ssid), "%s", ssid);
+            snprintf(g_settings.wifi_pass, sizeof(g_settings.wifi_pass), "%s", pass);
+            if (server[0]) snprintf(g_settings.server, sizeof(g_settings.server), "%s", server);
+            if (tz[0]) {
+                snprintf(g_settings.tz, sizeof(g_settings.tz), "%s", tz);
+                time_apply_tz(tz);
+            }
+            settings_save();
+            net_reconnect();
+        }
         portal_render();
         if (net_portal_state() == PORTAL_SAVED && net_state() == NET_CONNECTED) {
             leave_portal();
             audio_beep(BEEP_OK);
-            shell_toast("Wi-Fi 已连接");
+            shell_toast("无线网络已连接");
             build(PAGE_LIST);
         }
     } else if (now - last > 1000) {

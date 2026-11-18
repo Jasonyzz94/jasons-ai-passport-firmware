@@ -159,7 +159,6 @@ void ui_pix_set(lv_obj_t *o, const pixel_sprite_t *sprite)
     pix_img_t *img = lv_obj_get_user_data(o);
     if (!img || img->dsc.header.w != sprite->width || img->dsc.header.h != sprite->height) return;
     pix_fill(img, sprite);
-    lv_image_cache_drop(&img->dsc);
     lv_obj_invalidate(o);
 }
 

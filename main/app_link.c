@@ -132,7 +132,7 @@ static void render_log(void)
 {
     lv_obj_clean(s_log_box);
     if (!s_log_count) {
-        lv_obj_t *e = ui_label(s_log_box, &ui_font_14, C_TEXT3, "长按 OK 对讲,或发一条快捷消息");
+        lv_obj_t *e = ui_label(s_log_box, &ui_font_14, C_TEXT3, "长按确定键对讲,或发一条快捷消息");
         lv_obj_align(e, LV_ALIGN_CENTER, 0, 0);
         return;
     }
@@ -163,7 +163,7 @@ static void render_partner(void)
     if (!link_partner(&p)) return;
     lv_label_set_text(s_partner_name, p.name);
     const bool online = link_partner_online();
-    lv_label_set_text_fmt(s_partner_state, online ? "在线 · 信号 %d dBm" : "离线 · 等待对方打开互联",
+    lv_label_set_text_fmt(s_partner_state, online ? "在线 · 信号 %d" : "离线 · 等待对方打开互联",
                           p.rssi);
     lv_obj_set_style_bg_color(s_partner_dot, ui_c(online ? C_OK : C_TEXT3), 0);
 }
@@ -186,7 +186,7 @@ static void build_main(lv_obj_t *p)
     lv_obj_set_style_pad_row(s_log_box, 6, 0);
 
     s_talk = ui_card(p, UI_PAD, 176, UI_W - 2 * UI_PAD, 36, C_SURFACE2, 18);
-    lv_obj_t *tl = ui_label(s_talk, &ui_font_16, C_TEXT, "长按 OK 对讲");
+    lv_obj_t *tl = ui_label(s_talk, &ui_font_16, C_TEXT, "长按确定键对讲");
     lv_obj_center(tl);
 
     lv_obj_t *row = ui_box(p, 6, 220, UI_W - 12, 32);
@@ -207,7 +207,7 @@ static void talk_ui(bool on)
 {
     lv_obj_set_style_bg_color(s_talk, ui_c(on ? C_LINK : C_SURFACE2), 0);
     lv_obj_t *tl = lv_obj_get_child(s_talk, 0);
-    lv_label_set_text(tl, on ? "正在对讲 · 松开结束" : "长按 OK 对讲");
+    lv_label_set_text(tl, on ? "正在对讲 · 松开结束" : "长按确定键对讲");
     lv_obj_set_style_text_color(tl, ui_c(on ? C_BG : C_TEXT), 0);
 }
 
@@ -280,7 +280,7 @@ static void render_nearby(void)
     ui_list_clear(&s_list);
     for (int i = 0; i < s_nearby_count; i++) {
         char v[16];
-        snprintf(v, sizeof(v), "%d dBm", s_nearby[i].rssi);
+        snprintf(v, sizeof(v), "信号 %d", s_nearby[i].rssi);
         ui_list_add(&s_list, &ICON_LINK, s_nearby[i].name, v, false);
     }
     if (s_nearby_count) ui_list_focus(&s_list, focus < s_nearby_count ? focus : 0, false);

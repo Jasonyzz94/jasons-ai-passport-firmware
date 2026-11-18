@@ -84,10 +84,10 @@ static void render(int dir)
     lv_obj_clean(s_dots);
     if (s_count == 0) {
         if (relay_state() != SRV_OK) {
-            ui_empty(s_view, &IC_CLOUD_OFF, "找不到中转服务器", "看板内容由 Mac mini 提供");
+            ui_empty(s_view, &IC_CLOUD_OFF, "找不到中转服务器", "看板内容由家里的服务器提供");
         } else {
             ui_empty(s_view, &ICON_BOARD, s_req >= 0 ? "正在加载…" : "还没有卡片",
-                     s_req >= 0 ? NULL : "在服务器 config.toml 里添加");
+                     s_req >= 0 ? NULL : "在服务器配置文件里添加卡片");
         }
         return;
     }

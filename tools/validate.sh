@@ -115,6 +115,18 @@ run_static_checks() {
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/test_pomodoro.c main/pomodoro.c -o "${test_dir}/test_pomodoro"
     "${test_dir}/test_pomodoro"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_icons.c main/icons.c -o "${test_dir}/test_icons"
+    "${test_dir}/test_icons"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_audio_dsp.c main/audio_dsp.c -lm -o "${test_dir}/test_audio_dsp"
+    "${test_dir}/test_audio_dsp"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_hid_keymap.c main/hid_keymap.c -o "${test_dir}/test_hid_keymap"
+    "${test_dir}/test_hid_keymap"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_link_proto.c main/link_proto.c main/audio_dsp.c -lm -o "${test_dir}/test_link_proto"
+    "${test_dir}/test_link_proto"
     for demo in audio low_power ble wifi; do
         "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
             -ffunction-sections -fdata-sections -Itests/demo_stubs -Imain \

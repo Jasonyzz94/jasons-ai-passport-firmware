@@ -72,7 +72,7 @@ static void raise_alert(pomo_event_t ev)
         audio_beep(BEEP_WORK_DONE);
     } else {
         snprintf(detail, sizeof(detail), s_pomo.auto_next ? "下一个专注已自动开始"
-                                                          : "准备好了就按 OK 开始专注");
+                                                          : "准备好了就按确定键开始专注");
         shell_alert(PIXEL_THEMES[s_theme].rest[0], C_BREAK, "休息结束", detail, alert_closed);
         audio_beep(BEEP_BREAK_DONE);
     }

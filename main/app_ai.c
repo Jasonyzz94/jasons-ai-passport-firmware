@@ -118,7 +118,7 @@ static void refresh_dock(ai_state_t st)
         break;
     default:
         if (ready) {
-            dock_set("按住 OK 说话", C_SURFACE2, C_TEXT, false);
+            dock_set("按住确定键说话", C_SURFACE2, C_TEXT, false);
             shell_hints("按住OK:说话|▲▼:翻看|长▲:返回");
         } else {
             dock_set(net_state() == NET_CONNECTED ? "正在寻找服务器…" : "正在联网…",
@@ -136,7 +136,7 @@ static void create(lv_obj_t *root)
     s_talking = false;
     s_press_ms = -1;
 
-    lv_obj_t *t = ui_label(root, &ui_font_20b, C_TEXT, "AI 助手");
+    lv_obj_t *t = ui_label(root, &ui_font_20b, C_TEXT, "语音助手");
     lv_obj_set_pos(t, UI_PAD + 4, 4);
     s_srv = ui_label(root, &ui_font_14, C_TEXT3, "");
     lv_obj_align(s_srv, LV_ALIGN_TOP_RIGHT, -UI_PAD - 4, 10);
@@ -227,7 +227,7 @@ static void tick(int64_t now)
         if (s_last_state == AI_LISTENING && st != AI_LISTENING) shell_keep_awake(st != AI_IDLE);
         if (st == AI_IDLE || st == AI_ERROR) shell_keep_awake(false);
         refresh_dock(st);
-        lv_label_set_text(s_srv, srv == SRV_OK ? "Mac mini 已连接" : "");
+        lv_label_set_text(s_srv, srv == SRV_OK ? "服务器已连接" : "");
         s_last_state = st;
         last_srv = srv;
     }
@@ -250,7 +250,7 @@ static void tick(int64_t now)
 }
 
 const app_t APP_AI = {
-    .name = "AI 助手",
+    .name = "语音助手",
     .desc = "按住说话,有问必答",
     .icon = &ICON_AI,
     .color = C_AI,

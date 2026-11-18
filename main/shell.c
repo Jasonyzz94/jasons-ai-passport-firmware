@@ -164,12 +164,37 @@ void shell_hints(const char *spec)
         lv_obj_set_flex_flow(grp, LV_FLEX_FLOW_ROW);
         lv_obj_set_flex_align(grp, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
         lv_obj_set_style_pad_column(grp, 3, 0);
-        lv_obj_t *key = ui_label(grp, &ui_font_14, C_TEXT, item);
+        // 源码里用 "OK"/"长▲" 这类短记号,显示成中文:OK→确定,长X→长按X。
+        char keytxt[32];
+        const char *k = item;
+        size_t n = 0;
+        if (!strncmp(k, "长", strlen("长"))) {
+            n += (size_t)snprintf(keytxt + n, sizeof(keytxt) - n, "长按");
+            k += strlen("长");
+        }
+        const char *ok = strstr(k, "OK");
+        if (ok) {
+            snprintf(keytxt + n, sizeof(keytxt) - n, "%.*s确定%s", (int)(ok - k), k, ok + 2);
+        } else {
+            snprintf(keytxt + n, sizeof(keytxt) - n, "%s", k);
+        }
+        lv_obj_t *key = ui_label(grp, &ui_font_14, C_TEXT, keytxt);
         lv_obj_set_style_bg_color(key, ui_c(C_SURFACE2), 0);
         lv_obj_set_style_bg_opa(key, LV_OPA_COVER, 0);
         lv_obj_set_style_radius(key, 5, 0);
         lv_obj_set_style_pad_hor(key, 3, 0);
         ui_label(grp, &ui_font_14, C_TEXT3, colon + 1);
+    }
+    // 放不下时从末尾去掉提示项(最后一项通常是全局通用的"长按▲ 返回")。
+    lv_obj_update_layout(s_hint);
+    for (;;) {
+        const uint32_t cnt = lv_obj_get_child_count(s_hint);
+        int32_t total = 0;
+        for (uint32_t i = 0; i < cnt; i++) total += lv_obj_get_width(lv_obj_get_child(s_hint, i));
+        total += (int32_t)(cnt ? cnt - 1 : 0) * 9;
+        if (total <= UI_W - 20 || cnt <= 1) break;
+        lv_obj_delete(lv_obj_get_child(s_hint, (int32_t)cnt - 1));
+        lv_obj_update_layout(s_hint);
     }
 }
 
@@ -286,7 +311,7 @@ void shell_confirm(const char *title, const char *detail, shell_confirm_cb_t cb)
         lv_obj_set_style_text_align(d, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_align(d, LV_ALIGN_TOP_MID, 0, 52);
     }
-    lv_obj_t *ok = ui_pill(card, "OK 确认", C_BG, C_TOMATO);
+    lv_obj_t *ok = ui_pill(card, "确定", C_BG, C_TOMATO);
     lv_obj_set_style_pad_ver(ok, 6, 0);
     lv_obj_align(ok, LV_ALIGN_BOTTOM_LEFT, 16, -16);
     lv_obj_t *no = ui_pill(card, "▲▼ 取消", C_TEXT, C_SURFACE2);
