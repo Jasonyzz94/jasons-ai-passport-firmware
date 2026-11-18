@@ -2,26 +2,8 @@
 #pragma once
 
 #include "lvgl.h"
+#include "pixel_types.h"
 #include <stdint.h>
-
-typedef struct {
-    char key;          // 字符画里的像素符号
-    uint32_t rgb;      // 对应颜色
-} pixel_color_t;
-
-typedef struct {
-    int width;
-    int height;
-    const char *const *rows;    // height 行,每行 width 个字符
-    const pixel_color_t *colors; // 以 key == '\0' 结尾
-} pixel_sprite_t;
-
-// 一套主题:专注 / 休息各两帧,400ms 交替形成动画。
-typedef struct {
-    const char *name;
-    const pixel_sprite_t *focus[2];
-    const pixel_sprite_t *rest[2];
-} pixel_theme_t;
 
 // 在 canvas 上按 scale 整数倍绘制精灵,bg_rgb 为背景色。
 void pixel_art_render(lv_obj_t *canvas, const pixel_sprite_t *sprite,
