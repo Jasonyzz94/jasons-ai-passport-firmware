@@ -142,6 +142,15 @@ run_static_checks() {
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_firmware.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_archive_firmware.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_install_passport_skills.py
+    # 直连天气转换用到 ESP-IDF 自带的 cJSON;没激活 ESP-IDF 时跳过。
+    if [[ -n "${IDF_PATH:-}" && -f "${IDF_PATH}/components/json/cJSON/cJSON.c" ]]; then
+        "${CC:-cc}" -std=gnu11 -Wall -Wextra -Werror -Imain -I"${IDF_PATH}/components/json/cJSON" \
+            tests/test_weather_shape.c main/weather_shape.c "${IDF_PATH}/components/json/cJSON/cJSON.c" \
+            -lm -o "${test_dir}/test_weather_shape"
+        "${test_dir}/test_weather_shape"
+    else
+        echo "weather shape tests: SKIPPED (activate ESP-IDF for cJSON)"
+    fi
     # 中转服务器测试需要 aiohttp/anthropic(server/requirements.txt);没装时跳过并明确报告。
     if "${SERVER_PYTHON:-python3}" -c "import aiohttp, anthropic" 2>/dev/null; then
         PYTHONDONTWRITEBYTECODE=1 "${SERVER_PYTHON:-python3}" -m unittest discover -s server/tests -q

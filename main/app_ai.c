@@ -4,6 +4,7 @@
 // 按键:按住 OK 说话(短按 = 重播上一条)· ▲▼ 翻看对话 · 长▼ 清空 · 长▲ 返回
 #include "apps.h"
 #include "icons.h"
+#include "settings.h"
 #include "svc.h"
 #include "ui.h"
 
@@ -98,7 +99,8 @@ static void dock_set(const char *text, uint32_t bg, uint32_t fg, bool meter)
 
 static void refresh_dock(ai_state_t st)
 {
-    const bool ready = relay_state() == SRV_OK;
+    const bool ready = relay_state() == SRV_OK
+                    || (net_state() == NET_CONNECTED && g_settings.api_key[0]);
     switch (st) {
     case AI_LISTENING:
         dock_set("松开发送", C_AI, C_BG, true);
@@ -121,7 +123,7 @@ static void refresh_dock(ai_state_t st)
             dock_set("按住确定键说话", C_SURFACE2, C_TEXT, false);
             shell_hints("按住OK:说话|▲▼:翻看|长▲:返回");
         } else {
-            dock_set(net_state() == NET_CONNECTED ? "正在寻找服务器…" : "正在联网…",
+            dock_set(net_state() == NET_CONNECTED ? "设置›无线网络›高级设置 填密钥" : "正在联网…",
                      C_SURFACE2, C_TEXT3, false);
             shell_hints("OK:重新查找|长▲:返回");
         }
@@ -170,7 +172,7 @@ static bool key(sys_key_t k, sys_key_ev_t ev)
     const ai_state_t st = ai_state();
     if (k == SYS_KEY_OK) {
         if (ev == SYS_EV_PRESS && (st == AI_IDLE || st == AI_ERROR)) {
-            if (relay_state() != SRV_OK) {
+            if (relay_state() != SRV_OK && !g_settings.api_key[0]) {
                 relay_discover();
                 return true;
             }
@@ -227,7 +229,8 @@ static void tick(int64_t now)
         if (s_last_state == AI_LISTENING && st != AI_LISTENING) shell_keep_awake(st != AI_IDLE);
         if (st == AI_IDLE || st == AI_ERROR) shell_keep_awake(false);
         refresh_dock(st);
-        lv_label_set_text(s_srv, srv == SRV_OK ? "服务器已连接" : "");
+        lv_label_set_text(s_srv, srv == SRV_OK ? "服务器已连接"
+                                 : (g_settings.api_key[0] && net_state() == NET_CONNECTED ? "云端直连" : ""));
         s_last_state = st;
         last_srv = srv;
     }

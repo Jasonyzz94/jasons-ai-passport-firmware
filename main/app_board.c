@@ -83,8 +83,8 @@ static void render(int dir)
     lv_obj_clean(s_view);
     lv_obj_clean(s_dots);
     if (s_count == 0) {
-        if (relay_state() != SRV_OK) {
-            ui_empty(s_view, &IC_CLOUD_OFF, "找不到中转服务器", "看板内容由家里的服务器提供");
+        if (!relay_ready()) {
+            ui_empty(s_view, &IC_CLOUD_OFF, "还没联网", "连上无线网络后显示看板");
         } else {
             ui_empty(s_view, &ICON_BOARD, s_req >= 0 ? "正在加载…" : "还没有卡片",
                      s_req >= 0 ? NULL : "在服务器配置文件里添加卡片");
@@ -141,7 +141,7 @@ static void render(int dir)
 
 static void request(void)
 {
-    if (s_req < 0 && relay_state() == SRV_OK) s_req = relay_request("/api/board", NULL);
+    if (s_req < 0 && relay_ready()) s_req = relay_request("/api/board", NULL);
 }
 
 static void create(lv_obj_t *root)
@@ -171,7 +171,7 @@ static bool key(sys_key_t k, sys_key_ev_t ev)
 {
     if (ev != SYS_EV_CLICK) return false;
     if (k == SYS_KEY_OK) {
-        if (relay_state() != SRV_OK) relay_discover();
+        if (!relay_ready()) relay_discover();
         request();
         shell_toast("正在刷新");
         return true;

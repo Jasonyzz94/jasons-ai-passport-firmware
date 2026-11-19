@@ -40,7 +40,7 @@ typedef struct {
     char key[16];
     int is_str;
     int32_t i;
-    char s[128];
+    char s[256];
     size_t blen;
 } kv_t;
 static kv_t s_kv[KV_MAX];

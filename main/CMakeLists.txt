@@ -6,10 +6,10 @@ file(GLOB TOOLBOX_SRCS
 idf_component_register(
     SRCS ${TOOLBOX_SRCS}
          "shell.c" "ui.c" "icons.c" "pixel_art.c" "settings.c"
-         "pomodoro.c" "audio_dsp.c" "hid_keymap.c" "link_proto.c"
+         "pomodoro.c" "audio_dsp.c" "hid_keymap.c" "link_proto.c" "weather_shape.c"
     INCLUDE_DIRS "."
     REQUIRES bsp esp_timer nvs_flash esp_wifi esp_netif esp_event esp_http_client
-             esp_http_server json lwip bt esp_hid
+             esp_http_server json lwip bt esp_hid mbedtls
 )
 
 # 生成的中文/数字字库(tools/gen_fonts.py)

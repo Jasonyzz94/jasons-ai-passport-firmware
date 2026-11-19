@@ -66,10 +66,12 @@ bool net_portal_start(void) { return true; }
 void net_portal_stop(void) {}
 portal_state_t net_portal_state(void) { return g_fake.portal; }
 const char *net_portal_ssid(void) { return "Passport-A3F2"; }
-bool net_portal_take(char a[33], char b[65], char c[96], char d[48]) { (void)a; (void)b; (void)c; (void)d; return false; }
+bool net_portal_take(portal_form_t *f) { (void)f; return false; }
 
 // ---- 中转服务器 ----
 srv_state_t relay_state(void) { return g_fake.srv; }
+bool relay_ready(void) { return g_fake.net == NET_CONNECTED; }
+bool relay_local(void) { return g_fake.srv != SRV_OK; }
 const char *relay_url(void) { return "http://192.168.31.20:8787"; }
 void relay_discover(void) {}
 
@@ -142,6 +144,7 @@ void audio_beep(beep_t p) { (void)p; }
 void audio_apply_volume(void) {}
 bool audio_analyze_start(void) { return true; }
 void audio_analyze_stop(void) {}
+void audio_analyze_pitch(bool on) { (void)on; }
 bool audio_analysis_get(audio_analysis_t *out)
 {
     for (int i = 0; i < AUDIO_BANDS; i++) {

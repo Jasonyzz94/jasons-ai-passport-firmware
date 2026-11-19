@@ -44,6 +44,7 @@ static SemaphoreHandle_t s_lock;
 static TaskHandle_t s_task;
 
 static volatile bool s_analyze;
+static volatile bool s_want_pitch;
 static volatile bool s_capture;
 static audio_sink_t s_sink;
 static void *s_sink_user;
@@ -128,8 +129,11 @@ static void analyze_push(const int16_t *pcm, int n)
     memcpy(s_win + ANALYZE_N - n, pcm, (size_t)n * sizeof(int16_t));
     if (s_win_fill < ANALYZE_N) s_win_fill += n;
     if (s_win_fill < ANALYZE_N) return;
+    // 没有浮点单元:频谱约 15 次/秒;音高只在调音器页需要时算(约 10 次/秒)。
     static int skip;
-    if (++skip % 3) return;   // 约 20 次/秒
+    ++skip;
+    const bool do_pitch = s_want_pitch && skip % 6 == 0;
+    if (skip % 4 && !do_pitch) return;
 
     audio_analysis_t r;
     dsp_bands(s_win + ANALYZE_N - DSP_FFT_N, DSP_FFT_N, SR, r.bands, AUDIO_BANDS);
@@ -138,7 +142,11 @@ static void analyze_push(const int16_t *pcm, int n)
     if (r.db < 20) r.db = 20;
     if (r.db > s_peak_db) s_peak_db = r.db;
     r.peak_db = s_peak_db;
-    r.pitch_hz = dsp_pitch(s_win, ANALYZE_N, SR, &r.clarity);
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    r.pitch_hz = s_result.pitch_hz;
+    r.clarity = s_result.clarity;
+    xSemaphoreGive(s_lock);
+    if (do_pitch) r.pitch_hz = dsp_pitch(s_win, ANALYZE_N, SR, &r.clarity);
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_result = r;
     s_result_fresh = true;
@@ -196,7 +204,12 @@ static void audio_task(void *arg)
         // 麦克风
         if (s_analyze || s_capture) {
             if (bsp_audio_read(pcm, sizeof(pcm)) != ESP_OK) {
-                vTaskDelay(pdMS_TO_TICKS(10));
+                static int64_t warned;
+                if (sys_now_ms() - warned > 5000) {
+                    warned = sys_now_ms();
+                    ESP_LOGW(TAG, "麦克风读取失败");
+                }
+                vTaskDelay(pdMS_TO_TICKS(20));
                 continue;
             }
             int32_t peak = 0;
@@ -206,7 +219,10 @@ static void audio_task(void *arg)
             }
             const float lvl = sqrtf((float)peak / 32768.0f);
             s_level = s_level * 0.6f + lvl * 0.4f;
-            if (s_analyze) analyze_push(pcm, CHUNK);
+            if (s_analyze) {
+                analyze_push(pcm, CHUNK);
+                taskYIELD();
+            }
             if (s_capture && s_sink) {
                 for (int i = 0; i < CHUNK; i++) {
                     enc_buf[enc_fill++] = pcm[i];
@@ -234,7 +250,9 @@ void audio_svc_init(void)
     }
     bsp_audio_set_volume((uint8_t)g_settings.volume);
     s_ok = true;
-    xTaskCreate(audio_task, "audio", 6144, NULL, 6, &s_task);
+    // 优先级必须低于 LVGL 任务(4):分析算得慢时只会少几帧,不会饿死界面和空闲任务
+    // (之前是 6,配合软件浮点的音高检测会触发看门狗 = "死机")。
+    xTaskCreate(audio_task, "audio", 6144, NULL, 3, &s_task);
 }
 
 void audio_beep(beep_t pattern)
@@ -251,6 +269,8 @@ void audio_apply_volume(void)
     xQueueSend(s_cmd, &c, 0);
 }
 
+void audio_analyze_pitch(bool on) { s_want_pitch = on; }
+
 bool audio_analyze_start(void)
 {
     s_peak_db = 0;
@@ -259,7 +279,11 @@ bool audio_analyze_start(void)
     return s_ok;
 }
 
-void audio_analyze_stop(void) { s_analyze = false; }
+void audio_analyze_stop(void)
+{
+    s_analyze = false;
+    s_want_pitch = false;
+}
 
 bool audio_analysis_get(audio_analysis_t *out)
 {

@@ -142,6 +142,8 @@ void pomo_remote_start(int minutes)
     pomo_toggle(&s_pomo, sys_now_ms());
 }
 
+int pomo_today_done(void) { return s_pomo.done; }
+
 bool pomo_running_focus(int *minutes)
 {
     if (s_pomo.state != POMO_STATE_RUNNING || s_pomo.phase != POMO_PHASE_WORK) return false;

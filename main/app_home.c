@@ -72,11 +72,11 @@ static void build_list(void)
     const int focus = s_built ? s_list.focus : 0;
     lv_obj_clean(s_body);
     if (!s_count) {
-        if (relay_state() != SRV_OK) {
-            ui_empty(s_body, &IC_CLOUD_OFF, "找不到中转服务器", "智能家居经家里的服务器转发");
+        if (!relay_ready()) {
+            ui_empty(s_body, &IC_CLOUD_OFF, "还没联网", "连上无线网络后可以控制家居");
         } else {
             ui_empty(s_body, &ICON_HOME, s_req >= 0 ? "正在加载…" : "没有设备",
-                     s_req >= 0 ? NULL : "在服务器里配置家庭助手");
+                     s_req >= 0 ? NULL : "在 设置›无线网络›高级设置 里填写");
         }
         s_built = false;
         return;
@@ -123,7 +123,7 @@ static void parse_list(const char *body)
 
 static void request_list(void)
 {
-    if (s_req < 0 && relay_state() == SRV_OK) s_req = relay_request("/api/home", NULL);
+    if (s_req < 0 && relay_ready()) s_req = relay_request("/api/home", NULL);
 }
 
 static void create(lv_obj_t *root)
@@ -157,7 +157,7 @@ static bool key(sys_key_t k, sys_key_ev_t ev)
     if (ev != SYS_EV_CLICK) return false;
     if (!s_built) {
         if (k == SYS_KEY_OK) {
-            if (relay_state() != SRV_OK) relay_discover();
+            if (!relay_ready()) relay_discover();
             request_list();
         }
         return true;

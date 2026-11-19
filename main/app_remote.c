@@ -41,14 +41,18 @@ typedef struct {
     const pixel_sprite_t *icon;
     const char *up, *ok, *down;
     const char *extra;
+    const char *up2, *ok2, *down2;   // 键卡片第二行:长按 / 双击功能(为空则不显示)
 } mode_info_t;
 
 static const mode_info_t k_modes[MODE_COUNT] = {
-    {"编程助手", "AI 编程一手遥控", &ICON_AI, "↑ 上一项", "回车", "↓ 下一项",
-     "长按确定 打断 · 长按▼ 切换模式"},
-    {"翻页笔", "演示文稿翻页", &IC_SLIDES, "上一页", "开始放映", "下一页", "长按 ▼ 黑屏"},
-    {"媒体", "音乐与视频", &IC_MUSIC, "音量 +", "播放 / 暂停", "音量 -", "长按 ▼ 下一首"},
-    {"拍照", "手机相机快门", &IC_CAMERA, "快门", "快门", "快门", "相机里任意键都是快门"},
+    {"编程助手", "AI 编程一手遥控", &ICON_AI, "↑ 上一项", "回车 · 同意", "↓ 下一项", "",
+     "双击 切换计划模式", "长按打断  双击指令", "长按语音  双击换系统"},
+    {"翻页笔", "演示文稿翻页", &IC_SLIDES, "上一页", "开始放映", "下一页", "",
+     NULL, NULL, "长按 黑屏"},
+    {"媒体", "音乐与视频", &IC_MUSIC, "音量 +", "播放 / 暂停", "音量 -", "",
+     NULL, NULL, "长按 下一首"},
+    {"拍照", "手机相机快门", &IC_CAMERA, "快门", "快门", "快门", "相机里任意键都是快门",
+     NULL, NULL, NULL},
 };
 
 // 快捷指令:列表显示中文说明,实际键入英文指令并回车(HID 键盘只能可靠地发送 ASCII)。
@@ -110,17 +114,28 @@ static void build_modes(lv_obj_t *p)
     shell_hints("▲▼:选择|OK:进入|长▲:返回");
 }
 
-static lv_obj_t *key_card(lv_obj_t *root, int y, int h, const char *glyph, int idx)
+// 键卡片:左侧键名,右侧两行 —— 单击功能(大)+ 长按/双击功能(小)。
+static lv_obj_t *key_card(lv_obj_t *root, int y, int h, const char *glyph, int idx,
+                          const char *main_text, const char *sub_text)
 {
-    lv_obj_t *c = ui_card(root, UI_PAD + 14, y, UI_W - 2 * UI_PAD - 28, h, C_SURFACE, h / 2);
+    lv_obj_t *c = ui_card(root, UI_PAD, y, UI_W - 2 * UI_PAD, h, C_SURFACE, 14);
     lv_obj_set_style_border_width(c, 1, 0);
     lv_obj_set_style_border_color(c, ui_c(C_LINE), 0);
     lv_obj_t *g = ui_label(c, &ui_font_16, C_REMOTE, glyph);
-    lv_obj_align(g, LV_ALIGN_LEFT_MID, 16, 0);
-    s_key_text[idx] = ui_label(c, idx == 1 ? &ui_font_20b : &ui_font_16, C_TEXT, "");
-    lv_obj_align(s_key_text[idx], LV_ALIGN_CENTER, 14, 0);
+    lv_obj_align(g, LV_ALIGN_LEFT_MID, 12, 0);
+    s_key_text[idx] = ui_label(c, idx == 1 ? &ui_font_20b : &ui_font_16, C_TEXT, main_text);
+    if (sub_text && sub_text[0]) {
+        lv_obj_align(s_key_text[idx], LV_ALIGN_TOP_LEFT, 56, idx == 1 ? 4 : 3);
+        lv_obj_t *sub = ui_label_w(c, &ui_font_14, C_TEXT3, UI_W - 2 * UI_PAD - 66, LV_TEXT_ALIGN_LEFT,
+                                   sub_text);
+        lv_obj_align(sub, LV_ALIGN_BOTTOM_LEFT, 56, -4);
+    } else {
+        lv_obj_align(s_key_text[idx], LV_ALIGN_LEFT_MID, 56, 0);
+    }
     return c;
 }
+
+static bool s_windows;   // 编程助手的"语音输入"发往 Windows(Win+H)还是 Mac(按两下右侧 ⌘)
 
 static void build_mode(lv_obj_t *p)
 {
@@ -128,17 +143,18 @@ static void build_mode(lv_obj_t *p)
     status_card(p);
     lv_obj_t *title = ui_label_w(p, &ui_font_16, C_REMOTE, UI_W, LV_TEXT_ALIGN_CENTER, m->name);
     lv_obj_set_pos(title, 0, 62);
-    s_keys[0] = key_card(p, 88, 38, "▲", 0);
-    s_keys[1] = key_card(p, 132, 48, "确定", 1);
-    s_keys[2] = key_card(p, 186, 38, "▼", 2);
-    lv_label_set_text(s_key_text[0], m->up);
-    lv_label_set_text(s_key_text[1], m->ok);
-    lv_label_set_text(s_key_text[2], m->down);
+    s_keys[0] = key_card(p, 86, 44, "▲", 0, m->up, m->up2);
+    s_keys[1] = key_card(p, 136, 52, "确定", 1, m->ok, m->ok2);
+    s_keys[2] = key_card(p, 194, 44, "▼", 2, m->down, m->down2);
     lv_obj_t *extra = ui_label_w(p, &ui_font_14, C_TEXT3, UI_W - 2 * UI_PAD, LV_TEXT_ALIGN_CENTER,
                                  m->extra);
-    lv_obj_set_pos(extra, UI_PAD, 234);
+    if (s_mode == MODE_VIBE) {
+        lv_label_set_text(extra, s_windows ? "语音输入:Windows(Win+H)"
+                                           : "Mac 听写快捷键请设为 按两下右⌘");
+    }
+    lv_obj_set_pos(extra, UI_PAD, 244);
     memset(s_flash_until, 0, sizeof(s_flash_until));
-    shell_hints(s_mode == MODE_VIBE ? "双击OK:快捷指令|长▲:换模式" : "长▲:换模式");
+    shell_hints("长▲:换模式");
 }
 
 static void build_phrases(lv_obj_t *p)
@@ -170,6 +186,7 @@ static void build(page_t page)
 static void create(lv_obj_t *root)
 {
     s_root = root;
+    s_windows = sys_kv_get_i32("r_win", 0) != 0;
     s_page = NULL;
     build(PAGE_MODES);
     if (!ble_hid_start()) shell_toast("蓝牙启动失败");
@@ -203,16 +220,40 @@ static bool mode_key(sys_key_t k, sys_key_ev_t ev)
     const bool lng = ev == SYS_EV_LONG;
 
     if (s_mode == MODE_VIBE) {
-        if (k == SYS_KEY_OK && ev == SYS_EV_DOUBLE) {
+        // ▲ 单击 ↑ · 双击 Shift+Tab   确定 单击 回车 · 长按 Esc · 双击 快捷指令
+        // ▼ 单击 ↓ · 长按 语音输入 · 双击 切换 Mac/Windows        (长按 ▲ = 返回)
+        const bool dbl = ev == SYS_EV_DOUBLE;
+        if (k == SYS_KEY_OK && dbl) {
             build(PAGE_PHRASES);
             return true;
         }
-        if (ev != SYS_EV_CLICK && !(lng && k != SYS_KEY_UP)) return false;
+        if (k == SYS_KEY_DOWN && dbl) {
+            s_windows = !s_windows;
+            sys_kv_set_i32("r_win", s_windows);
+            shell_toast(s_windows ? "语音输入:Windows" : "语音输入:Mac");
+            if (shell_screen_on()) build(PAGE_MODE);
+            return true;
+        }
+        if (ev != SYS_EV_CLICK && !dbl && !(lng && k != SYS_KEY_UP)) return false;
         if (!connected()) return true;
-        if (k == SYS_KEY_OK) ble_hid_key(lng ? KEY_ESC : KEY_ENTER, 0);
-        else if (k == SYS_KEY_DOWN && lng) ble_hid_key(KEY_TAB, MOD_SHIFT);
-        else ble_hid_key(k == SYS_KEY_UP ? KEY_UP : KEY_DOWN, 0);
-        if (lng) shell_toast(k == SYS_KEY_OK ? "已发送 退出键" : "已切换模式");
+        if (k == SYS_KEY_UP) {
+            if (dbl) ble_hid_key(KEY_TAB, MOD_SHIFT);
+            else ble_hid_key(KEY_UP, 0);
+        } else if (k == SYS_KEY_OK) {
+            ble_hid_key(lng ? KEY_ESC : KEY_ENTER, 0);
+        } else if (lng) {
+            if (s_windows) {
+                ble_hid_key(0x0B, 0x08);          // Win + H
+            } else {
+                ble_hid_key(0x00, 0x80);          // 右侧 ⌘ 按两下(Mac 听写快捷键)
+                ble_hid_key(0x00, 0x80);
+            }
+            shell_toast("语音输入");
+        } else {
+            ble_hid_key(KEY_DOWN, 0);
+        }
+        if (dbl) shell_toast("已切换模式");
+        else if (lng && k == SYS_KEY_OK) shell_toast("已打断");
         flash(idx);
         return true;
     }

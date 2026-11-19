@@ -11,13 +11,16 @@
 #include "sys.h"
 
 #include "cJSON.h"
+#include "esp_crt_bundle.h"
 #include "esp_http_client.h"
+#include "settings.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/stream_buffer.h"
 #include "freertos/task.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static const char *TAG = "ai";
@@ -193,6 +196,262 @@ static void talk(void)
     speak();
 }
 
+// ===========================================================================
+// 直连模式:没有中转服务器时,设备自己调用兼容 OpenAI 接口的云服务
+//   识别  POST {base}/audio/transcriptions   multipart(WAV 边录边传,分块上传)
+//   对话  POST {base}/chat/completions
+//   合成  POST {base}/audio/speech            返回 16 kHz PCM,边收边播
+// ===========================================================================
+#define BOUNDARY "----passport7c3boundary"
+#define DIRECT_SYSTEM "你是装在随身小设备里的中文语音助手,回答会被朗读并显示在小屏幕上。" \
+    "用简体中文口语回答,先给结论,通常一到三句话、不超过 120 字,不要用 Markdown、列表或表情。"
+
+static char s_hist_q[2][160], s_hist_a[2][320];
+static int s_hist_n;
+
+static bool direct_mode(void) { return relay_state() != SRV_OK && g_settings.api_key[0]; }
+
+static esp_http_client_handle_t open_direct(const char *path, int timeout)
+{
+    char url[160];
+    snprintf(url, sizeof(url), "%s%s", g_settings.api_base, path);
+    esp_http_client_config_t cfg = {
+        .url = url,
+        .method = HTTP_METHOD_POST,
+        .timeout_ms = timeout,
+        .buffer_size = 1024,
+        .buffer_size_tx = 1024,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+    };
+    esp_http_client_handle_t c = esp_http_client_init(&cfg);
+    if (!c) return NULL;
+    char auth[120];
+    snprintf(auth, sizeof(auth), "Bearer %s", g_settings.api_key);
+    esp_http_client_set_header(c, "Authorization", auth);
+    return c;
+}
+
+static int read_body(esp_http_client_handle_t c, char *out, int cap)
+{
+    int got = 0, r;
+    while (got < cap - 1 && (r = esp_http_client_read(c, out + got, cap - 1 - got)) > 0) got += r;
+    out[got] = '\0';
+    return got;
+}
+
+static void wav_header(uint8_t h[44])
+{
+    // 长度未知(边录边传):RIFF/data 长度写成最大值,解码器会读到流结束。
+    static const uint8_t t[44] = {'R','I','F','F',0xFF,0xFF,0xFF,0x7F,'W','A','V','E','f','m','t',' ',
+        16,0,0,0,1,0,1,0,0x80,0x3E,0,0,0,0x7D,0,0,2,0,16,0,'d','a','t','a',0xFF,0xFF,0xFF,0x7F};
+    memcpy(h, t, 44);
+}
+
+// 识别:把录音流(ADPCM 块)解码成 PCM,包成 WAV 分块上传。
+static bool direct_asr(char *text, size_t len)
+{
+    esp_http_client_handle_t c = open_direct("/audio/transcriptions", 30000);
+    if (!c) return false;
+    esp_http_client_set_header(c, "Content-Type", "multipart/form-data; boundary=" BOUNDARY);
+    if (esp_http_client_open(c, -1) != ESP_OK) {
+        esp_http_client_cleanup(c);
+        return false;
+    }
+    char head[320];
+    const int hl = snprintf(head, sizeof(head),
+        "--" BOUNDARY "\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n%s\r\n"
+        "--" BOUNDARY "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"voice.wav\"\r\n"
+        "Content-Type: audio/wav\r\n\r\n", g_settings.asr_model);
+    uint8_t wav[44];
+    wav_header(wav);
+    bool ok = write_chunk(c, (const uint8_t *)head, (size_t)hl) && write_chunk(c, wav, sizeof(wav));
+    const int64_t started = sys_now_ms();
+    uint8_t blk[ADPCM_BLOCK_BYTES];
+    size_t blk_fill = 0;   // 流缓冲是字节流:攒满一整块再解码
+    static int16_t pcm[ADPCM_BLOCK_SAMPLES];
+    while (ok) {
+        const size_t n = xStreamBufferReceive(s_stream, blk + blk_fill, sizeof(blk) - blk_fill,
+                                              pdMS_TO_TICKS(40));
+        blk_fill += n;
+        if (blk_fill == sizeof(blk)) {
+            const int samples = adpcm_decode_block(blk, blk_fill, pcm, ADPCM_BLOCK_SAMPLES);
+            ok = write_chunk(c, (const uint8_t *)pcm, (size_t)samples * 2);
+            blk_fill = 0;
+        }
+        if (s_cancel) break;
+        if (sys_now_ms() - started > MAX_TALK_MS) s_end = true;
+        if (s_end && !n && xStreamBufferIsEmpty(s_stream)) break;
+    }
+    audio_capture_stop();
+    static const char tail[] = "\r\n--" BOUNDARY "--\r\n";
+    if (ok && !s_cancel) ok = write_chunk(c, (const uint8_t *)tail, sizeof(tail) - 1) && write_chunk(c, NULL, 0);
+    if (ok && !s_cancel) s_state = AI_THINKING;
+    int status = -1;
+    static char resp[768];
+    if (ok && !s_cancel) {
+        esp_http_client_fetch_headers(c);
+        status = esp_http_client_get_status_code(c);
+        read_body(c, resp, sizeof(resp));
+    }
+    esp_http_client_close(c);
+    esp_http_client_cleanup(c);
+    if (status != 200) {
+        if (status > 0) ESP_LOGW(TAG, "识别失败 %d: %.120s", status, resp);
+        return false;
+    }
+    cJSON *j = cJSON_Parse(resp);
+    const cJSON *t = cJSON_GetObjectItemCaseSensitive(j, "text");
+    snprintf(text, len, "%s", cJSON_IsString(t) ? t->valuestring : "");
+    cJSON_Delete(j);
+    return text[0] != '\0';
+}
+
+static bool direct_chat(const char *question, char *answer, size_t len)
+{
+    cJSON *req = cJSON_CreateObject();
+    cJSON_AddStringToObject(req, "model", g_settings.llm_model);
+    cJSON_AddNumberToObject(req, "max_tokens", 400);
+    cJSON *msgs = cJSON_AddArrayToObject(req, "messages");
+    cJSON *m = cJSON_CreateObject();
+    cJSON_AddStringToObject(m, "role", "system");
+    cJSON_AddStringToObject(m, "content", DIRECT_SYSTEM);
+    cJSON_AddItemToArray(msgs, m);
+    for (int i = 0; i < s_hist_n; i++) {   // 带上最近两轮,支持追问
+        m = cJSON_CreateObject();
+        cJSON_AddStringToObject(m, "role", "user");
+        cJSON_AddStringToObject(m, "content", s_hist_q[i]);
+        cJSON_AddItemToArray(msgs, m);
+        m = cJSON_CreateObject();
+        cJSON_AddStringToObject(m, "role", "assistant");
+        cJSON_AddStringToObject(m, "content", s_hist_a[i]);
+        cJSON_AddItemToArray(msgs, m);
+    }
+    m = cJSON_CreateObject();
+    cJSON_AddStringToObject(m, "role", "user");
+    cJSON_AddStringToObject(m, "content", question);
+    cJSON_AddItemToArray(msgs, m);
+    char *body = cJSON_PrintUnformatted(req);
+    cJSON_Delete(req);
+    if (!body) return false;
+
+    esp_http_client_handle_t c = open_direct("/chat/completions", 60000);
+    bool ok = false;
+    if (c) {
+        esp_http_client_set_header(c, "Content-Type", "application/json");
+        const int bl = (int)strlen(body);
+        if (esp_http_client_open(c, bl) == ESP_OK && esp_http_client_write(c, body, bl) == bl) {
+            esp_http_client_fetch_headers(c);
+            const int status = esp_http_client_get_status_code(c);
+            char *resp = malloc(4096);
+            if (resp) {
+                read_body(c, resp, 4096);
+                cJSON *j = status == 200 ? cJSON_Parse(resp) : NULL;
+                const cJSON *ch = cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(j, "choices"), 0);
+                const cJSON *msg = cJSON_GetObjectItemCaseSensitive(ch, "message");
+                const cJSON *content = cJSON_GetObjectItemCaseSensitive(msg, "content");
+                if (cJSON_IsString(content)) {
+                    snprintf(answer, len, "%s", content->valuestring);
+                    ok = true;
+                } else {
+                    ESP_LOGW(TAG, "对话失败 %d: %.160s", status, resp);
+                }
+                cJSON_Delete(j);
+                free(resp);
+            }
+        }
+        esp_http_client_close(c);
+        esp_http_client_cleanup(c);
+    }
+    free(body);
+    if (ok) {
+        if (s_hist_n == 2) {
+            memcpy(s_hist_q[0], s_hist_q[1], sizeof(s_hist_q[0]));
+            memcpy(s_hist_a[0], s_hist_a[1], sizeof(s_hist_a[0]));
+            s_hist_n = 1;
+        }
+        snprintf(s_hist_q[s_hist_n], sizeof(s_hist_q[0]), "%s", question);
+        snprintf(s_hist_a[s_hist_n], sizeof(s_hist_a[0]), "%s", answer);
+        s_hist_n++;
+    }
+    return ok;
+}
+
+static void direct_speak(const char *text)
+{
+    if (!audio_available() || !g_settings.tts_model[0] || !text[0]) {
+        s_state = AI_IDLE;
+        return;
+    }
+    s_state = AI_SPEAKING;
+    cJSON *req = cJSON_CreateObject();
+    cJSON_AddStringToObject(req, "model", g_settings.tts_model);
+    cJSON_AddStringToObject(req, "voice", g_settings.tts_voice);
+    cJSON_AddStringToObject(req, "input", text);
+    cJSON_AddStringToObject(req, "response_format", "pcm");
+    cJSON_AddNumberToObject(req, "sample_rate", 16000);
+    char *body = cJSON_PrintUnformatted(req);
+    cJSON_Delete(req);
+    esp_http_client_handle_t c = body ? open_direct("/audio/speech", 30000) : NULL;
+    if (c) {
+        esp_http_client_set_header(c, "Content-Type", "application/json");
+        const int bl = (int)strlen(body);
+        if (esp_http_client_open(c, bl) == ESP_OK && esp_http_client_write(c, body, bl) == bl) {
+            esp_http_client_fetch_headers(c);
+            if (esp_http_client_get_status_code(c) == 200) {
+                static int16_t pcm[ADPCM_BLOCK_SAMPLES];
+                uint8_t blk[ADPCM_BLOCK_BYTES];
+                adpcm_state_t enc = {0, 0};
+                int fill = 0;   // 字节
+                while (!s_cancel) {
+                    const int r = esp_http_client_read(c, (char *)pcm + fill, (int)sizeof(pcm) - fill);
+                    if (r <= 0) break;
+                    fill += r;
+                    if (fill == (int)sizeof(pcm)) {
+                        audio_play_push(blk, adpcm_encode_block(&enc, pcm, ADPCM_BLOCK_SAMPLES, blk));
+                        fill = 0;
+                    }
+                }
+                if (fill >= 4 && !s_cancel) audio_play_push(blk, adpcm_encode_block(&enc, pcm, fill / 2, blk));
+            } else {
+                ESP_LOGW(TAG, "合成失败 %d", esp_http_client_get_status_code(c));
+            }
+        }
+        esp_http_client_close(c);
+        esp_http_client_cleanup(c);
+    }
+    free(body);
+    while (!s_cancel && audio_playing()) vTaskDelay(pdMS_TO_TICKS(50));
+    if (s_cancel) audio_play_flush();
+    s_state = AI_IDLE;
+}
+
+static void direct_talk(void)
+{
+    char question[160];
+    if (!direct_asr(question, sizeof(question))) {
+        if (s_cancel) s_state = AI_IDLE;
+        else fail("没听清,再说一次");
+        return;
+    }
+    if (s_cancel) {
+        s_state = AI_IDLE;
+        return;
+    }
+    s_state = AI_THINKING;
+    static char answer[640];
+    if (!direct_chat(question, answer, sizeof(answer))) {
+        fail("云端对话失败,检查密钥");
+        return;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    snprintf(s_q, sizeof(s_q), "%s", question);
+    snprintf(s_a, sizeof(s_a), "%s", answer);
+    s_audio_id[0] = '\0';
+    s_result_ready = true;
+    xSemaphoreGive(s_lock);
+    direct_speak(answer);
+}
+
 static void ai_task(void *arg)
 {
     (void)arg;
@@ -201,17 +460,25 @@ static void ai_task(void *arg)
         if (s_replay) {
             s_replay = false;
             s_cancel = false;
-            speak();
+            if (s_audio_id[0]) speak();
+            else direct_speak(s_a);
             continue;
         }
-        if (s_state == AI_LISTENING) talk();
+        if (s_state == AI_LISTENING) {
+            if (direct_mode()) direct_talk();
+            else talk();
+        }
     }
 }
 
 bool ai_talk_begin(void)
 {
-    if (relay_state() != SRV_OK) {
-        fail("找不到服务器");
+    if (relay_state() != SRV_OK && !g_settings.api_key[0]) {
+        fail("没有服务器,也没填云端密钥");
+        return false;
+    }
+    if (net_state() != NET_CONNECTED) {
+        fail("还没联网");
         return false;
     }
     if (!audio_available()) {
@@ -264,7 +531,7 @@ bool ai_take_result(char *question, size_t qlen, char *answer, size_t alen)
 
 void ai_replay(void)
 {
-    if (!s_task || !s_audio_id[0]) return;
+    if (!s_task || (!s_audio_id[0] && !s_a[0])) return;
     // 等上一轮任务因取消而退回空闲
     s_replay = true;
     xTaskNotifyGive(s_task);

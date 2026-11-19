@@ -51,6 +51,10 @@ srv_state_t relay_state(void)
     return s_state;
 }
 const char *relay_url(void) { return s_url; }
+bool relay_ready(void) { return net_state() == NET_CONNECTED; }
+bool relay_local(void) { return net_state() == NET_CONNECTED && s_state != SRV_OK; }
+
+int local_request(const char *path, const char *body, char *out, int cap);
 
 void relay_discover(void)
 {
@@ -217,12 +221,15 @@ static void relay_task(void *arg)
             }
             if (s->state != REQ_BUSY) continue;
             if (s_state != SRV_OK) {
-                s->status = 0;
-                s->state = REQ_ERROR;
-                continue;
+                // 没有服务器:天气 / 看板 / 家居由设备自己直连处理。
+                s->status = local_request(s->path, s->body, s->resp, RESP_MAX);
+            } else {
+                s->status = http(s_url, s->path, s->body, s->resp, RESP_MAX, 8000);
+                if (s->status < 0) {
+                    s_state = SRV_UNREACHABLE;   // 连接失败:这次改走直连,稍后自动重新发现
+                    s->status = local_request(s->path, s->body, s->resp, RESP_MAX);
+                }
             }
-            s->status = http(s_url, s->path, s->body, s->resp, RESP_MAX, 8000);
-            if (s->status < 0) s_state = SRV_UNREACHABLE;   // 连接失败:下次自动重新发现
             s->state = s->status > 0 ? REQ_DONE : REQ_ERROR;
             if (s->abandoned) {
                 free(s->body);

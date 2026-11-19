@@ -38,7 +38,7 @@ static const char *srv_text(void)
     switch (relay_state()) {
     case SRV_OK: return "已连接";
     case SRV_DISCOVERING: return "查找中…";
-    case SRV_UNREACHABLE: return "未找到";
+    case SRV_UNREACHABLE: return net_state() == NET_CONNECTED ? "未找到 · 直连" : "未找到";
     case SRV_NO_NET: return "未联网";
     default: return "未连接";
     }
@@ -142,7 +142,7 @@ static void build_portal(lv_obj_t *p)
     s_portal_status = ui_label_w(p, &ui_font_16, C_TEXT2, UI_W - 2 * UI_PAD, LV_TEXT_ALIGN_CENTER, "");
     lv_obj_set_pos(s_portal_status, UI_PAD, 198);
     lv_obj_t *tip = ui_label_w(p, &ui_font_14, C_TEXT3, UI_W - 2 * UI_PAD, LV_TEXT_ALIGN_CENTER,
-                               "配置页还可填服务器地址");
+                               "网页里还有高级设置:云端密钥、天气、家居");
     lv_obj_set_pos(tip, UI_PAD, 226);
     s_last_portal = (portal_state_t)-1;
     shell_hints("长▲:取消返回");
@@ -324,17 +324,38 @@ static void tick(int64_t now)
 {
     static int64_t last;
     if (s_kind == PAGE_PORTAL) {
-        char ssid[33], pass[65], server[96], tz[48];
-        if (net_portal_take(ssid, pass, server, tz)) {
-            snprintf(g_settings.wifi_ssid, sizeof(g_settings.wifi_ssid), "%s", ssid);
-            snprintf(g_settings.wifi_pass, sizeof(g_settings.wifi_pass), "%s", pass);
-            if (server[0]) snprintf(g_settings.server, sizeof(g_settings.server), "%s", server);
-            if (tz[0]) {
-                snprintf(g_settings.tz, sizeof(g_settings.tz), "%s", tz);
-                time_apply_tz(tz);
+        static portal_form_t f;
+        if (net_portal_take(&f)) {
+#define SET(dst, src) snprintf(dst, sizeof(dst), "%s", src)
+            const bool wifi_changed = f.ssid[0] != '\0';
+            if (wifi_changed) {
+                SET(g_settings.wifi_ssid, f.ssid);
+                SET(g_settings.wifi_pass, f.pass);
             }
+            // 普通字段:提交什么就存什么(清空也生效);密钥类字段留空表示不修改。
+            SET(g_settings.server, f.server);
+            if (f.api_base[0]) SET(g_settings.api_base, f.api_base);
+            if (f.api_key[0]) SET(g_settings.api_key, f.api_key);
+            if (f.llm_model[0]) SET(g_settings.llm_model, f.llm_model);
+            if (f.asr_model[0]) SET(g_settings.asr_model, f.asr_model);
+            if (f.tts_model[0]) SET(g_settings.tts_model, f.tts_model);
+            if (f.tts_voice[0]) SET(g_settings.tts_voice, f.tts_voice);
+            SET(g_settings.city, f.city);
+            SET(g_settings.lat, f.lat);
+            SET(g_settings.lon, f.lon);
+            SET(g_settings.ha_url, f.ha_url);
+            if (f.ha_token[0]) SET(g_settings.ha_token, f.ha_token);
+            SET(g_settings.ha_entities, f.ha_entities);
+#undef SET
             settings_save();
-            net_reconnect();
+            if (wifi_changed) {
+                net_reconnect();
+            } else {
+                leave_portal();
+                shell_toast("高级设置已保存");
+                build(PAGE_LIST);
+                return;
+            }
         }
         portal_render();
         if (net_portal_state() == PORTAL_SAVED && net_state() == NET_CONNECTED) {

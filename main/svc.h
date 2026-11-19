@@ -66,8 +66,16 @@ bool net_portal_start(void);
 void net_portal_stop(void);
 portal_state_t net_portal_state(void);
 const char *net_portal_ssid(void);   // 例 "Passport-A3F2"
-// 手机在配置页提交后返回 true 并拷出内容(只返回一次);空字段表示未填写。
-bool net_portal_take(char ssid[33], char pass[65], char server[96], char tz[48]);
+// 手机在配置页提交的内容。空字段表示未填写(密钥类字段留空 = 不修改)。
+typedef struct {
+    bool valid;
+    char ssid[33], pass[65], server[96];
+    char api_base[80], api_key[96], llm_model[48], asr_model[48], tts_model[48], tts_voice[64];
+    char city[24], lat[12], lon[12];
+    char ha_url[64], ha_token[200], ha_entities[200];
+} portal_form_t;
+// 提交后返回 true 并拷出内容(只返回一次)。
+bool net_portal_take(portal_form_t *out);
 
 // ===========================================================================
 // 中转服务器(Mac mini)
@@ -83,6 +91,10 @@ typedef enum {
 typedef enum { REQ_FREE = 0, REQ_BUSY, REQ_DONE, REQ_ERROR } req_state_t;
 
 srv_state_t relay_state(void);
+// 能发请求:服务器在线,或者没有服务器但已联网(此时天气/看板/家居由设备直连处理)。
+bool relay_ready(void);
+// 没有服务器、由设备直连在处理请求。
+bool relay_local(void);
 const char *relay_url(void);
 void relay_discover(void);           // 局域网广播发现 + 配对取令牌
 // 发起请求,返回句柄(>=0),失败 -1。body 为 NULL 时 GET,否则 POST JSON。
@@ -119,6 +131,7 @@ typedef struct {
     float clarity;                   // 0..1 音高置信度
 } audio_analysis_t;
 bool audio_analyze_start(void);
+void audio_analyze_pitch(bool on);   // 只有调音器需要:音高检测较费 CPU
 void audio_analyze_stop(void);
 bool audio_analysis_get(audio_analysis_t *out);
 

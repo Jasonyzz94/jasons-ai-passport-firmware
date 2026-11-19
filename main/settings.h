@@ -16,6 +16,20 @@ typedef struct {
     char token[48];          // 服务器下发的设备令牌
     char tz[48];             // POSIX TZ,例 "CST-8"
     char name[24];           // 设备名(互联/蓝牙广播用)
+
+    // ---- 不经过中转服务器也能用的功能(在配网页"高级设置"里填) ----
+    char city[24];           // 天气城市名;空 = 按 IP 自动定位
+    char lat[12];            // 纬度/经度(字符串保存,空 = 自动定位)
+    char lon[12];
+    char api_base[80];       // 兼容 OpenAI 接口的云服务,例 https://api.siliconflow.cn/v1
+    char api_key[96];
+    char asr_model[48];      // 语音识别模型
+    char llm_model[48];      // 对话模型
+    char tts_model[48];      // 语音合成模型
+    char tts_voice[64];
+    char ha_url[64];         // Home Assistant,例 http://192.168.1.5:8123
+    char ha_token[200];
+    char ha_entities[200];   // 逗号分隔的实体 ID
 } settings_t;
 
 extern settings_t g_settings;

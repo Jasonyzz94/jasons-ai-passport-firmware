@@ -4,6 +4,7 @@
 // 绑定信息存 NVS(CONFIG_BT_NIMBLE_NVS_PERSIST),下次自动回连。
 // 发送动作在独立的 hid 任务里排队执行(每次按键需要按下 → 间隔 → 抬起)。
 #include "hid_keymap.h"
+#include "sys.h"
 #include "settings.h"
 #include "svc.h"
 
@@ -26,6 +27,8 @@
 static const char *TAG = "ble";
 
 void ble_store_config_init(void);
+void net_yield_radio(void);
+bool net_radio_on(void);
 
 #define RPT_KEYBOARD 1
 #define RPT_CONSUMER 2
@@ -43,7 +46,7 @@ static const uint8_t k_report_map[] = {
     0xC0,
 };
 
-typedef enum { ACT_KEY = 0, ACT_CONSUMER, ACT_TEXT } act_type_t;
+typedef enum { ACT_KEY = 0, ACT_CONSUMER, ACT_TEXT, ACT_START, ACT_STOP } act_type_t;
 typedef struct {
     act_type_t type;
     uint8_t key, mod;
@@ -144,12 +147,23 @@ static void send_key(uint8_t key, uint8_t mod)
     vTaskDelay(pdMS_TO_TICKS(12));
 }
 
+static bool do_start(void);
+static void do_stop(void);
+
 static void worker(void *arg)
 {
     (void)arg;
     act_t a;
     for (;;) {
         if (xQueueReceive(s_act, &a, portMAX_DELAY) != pdTRUE) continue;
+        if (a.type == ACT_START) {
+            do_start();
+            continue;
+        }
+        if (a.type == ACT_STOP) {
+            do_stop();
+            continue;
+        }
         if (s_state != BLE_CONNECTED || !s_dev) {
             free(a.text);
             continue;
@@ -199,15 +213,18 @@ void ble_hid_type(const char *ascii)
 }
 
 // ---------------------------------------------------------------------------
-bool ble_hid_start(void)
+static bool do_start(void)
 {
     if (s_running) return true;
     s_state = BLE_STARTING;
-    if (!s_act) {
-        s_act = xQueueCreate(16, sizeof(act_t));
-        xTaskCreate(worker, "hid", 3072, NULL, 5, &s_worker);
-    }
-    if (nimble_port_init() != ESP_OK) {
+    // 没人用 Wi-Fi 时先让它关掉(开机对时),最多等 2 秒,给蓝牙腾内存。
+    net_yield_radio();
+    for (int i = 0; i < 20 && net_radio_on(); i++) vTaskDelay(pdMS_TO_TICKS(100));
+    ESP_LOGI(TAG, "蓝牙启动前:空闲 %u,最大块 %u,Wi-Fi %s", (unsigned)sys_free_heap(),
+             (unsigned)sys_largest_block(), net_radio_on() ? "开" : "关");
+    const esp_err_t perr = nimble_port_init();
+    if (perr != ESP_OK) {
+        ESP_LOGE(TAG, "nimble_port_init 失败: %s", esp_err_to_name(perr));
         s_state = BLE_FAILED;
         return false;
     }
@@ -247,7 +264,11 @@ bool ble_hid_start(void)
         .report_maps = maps,
         .report_maps_len = 1,
     };
-    if (esp_hidd_dev_init(&cfg, ESP_HID_TRANSPORT_BLE, hidd_event, &s_dev) != ESP_OK) {
+    const esp_err_t herr = esp_hidd_dev_init(&cfg, ESP_HID_TRANSPORT_BLE, hidd_event, &s_dev);
+    if (herr != ESP_OK) {
+        ESP_LOGE(TAG, "esp_hidd_dev_init 失败: %s(空闲 %u)", esp_err_to_name(herr),
+                 (unsigned)sys_free_heap());
+        s_dev = NULL;
         nimble_port_deinit();
         s_state = BLE_FAILED;
         return false;
@@ -255,10 +276,11 @@ bool ble_hid_start(void)
     ble_store_config_init();
     s_running = true;
     nimble_port_freertos_init(host_task);
+    ESP_LOGI(TAG, "蓝牙已启动:空闲 %u", (unsigned)sys_free_heap());
     return true;
 }
 
-void ble_hid_stop(void)
+static void do_stop(void)
 {
     if (!s_running) return;
     s_running = false;
@@ -269,6 +291,29 @@ void ble_hid_stop(void)
     }
     if (nimble_port_stop() == 0) nimble_port_deinit();
     s_state = BLE_OFF;
+}
+
+// 启停都交给 hid 任务异步执行:界面线程不等待 NimBLE 初始化 / 关闭。
+bool ble_hid_start(void)
+{
+    if (!s_act) {
+        s_act = xQueueCreate(16, sizeof(act_t));
+        if (!s_act || xTaskCreate(worker, "hid", 4096, NULL, 4, &s_worker) != pdPASS) {
+            s_state = BLE_FAILED;
+            return false;
+        }
+    }
+    if (s_running) return true;
+    s_state = BLE_STARTING;
+    act_t a = {.type = ACT_START};
+    return xQueueSend(s_act, &a, 0) == pdTRUE;
+}
+
+void ble_hid_stop(void)
+{
+    if (!s_act) return;
+    act_t a = {.type = ACT_STOP};
+    xQueueSend(s_act, &a, pdMS_TO_TICKS(100));
 }
 
 void ble_hid_forget(void)

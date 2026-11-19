@@ -44,10 +44,15 @@ void dsp_fft(float *re, float *im, int n)
 void dsp_bands(const int16_t *pcm, int n, int sample_rate, float *bands, int nbands)
 {
     static float re[DSP_FFT_N], im[DSP_FFT_N];
+    static float window[DSP_FFT_N];
+    static int window_n;
     if (n > DSP_FFT_N) n = DSP_FFT_N;
+    if (window_n != n) {   // Hann 窗只算一次(没有 FPU,cosf 很贵)
+        for (int i = 0; i < n; i++) window[i] = 0.5f - 0.5f * cosf(2.0f * (float)M_PI * i / (float)(n - 1));
+        window_n = n;
+    }
     for (int i = 0; i < n; i++) {
-        const float w = 0.5f - 0.5f * cosf(2.0f * (float)M_PI * i / (float)(n - 1));   // Hann
-        re[i] = pcm[i] / 32768.0f * w;
+        re[i] = pcm[i] / 32768.0f * window[i];
         im[i] = 0.0f;
     }
     for (int i = n; i < DSP_FFT_N; i++) re[i] = im[i] = 0.0f;
@@ -83,35 +88,49 @@ float dsp_dbfs(const int16_t *pcm, int n)
 
 float dsp_pitch(const int16_t *pcm, int n, int sample_rate, float *clarity)
 {
-    // McLeod NSDF:nsdf(t) = 2*r(t) / m(t),取第一个超过 0.8*全局最大值的峰。
-    const int min_lag = sample_rate / 1200;   // 最高 1200 Hz
-    int max_lag = sample_rate / 50;           // 最低 50 Hz
-    if (max_lag > n / 2) max_lag = n / 2;
-    static float nsdf[512];
-    if (max_lag > 512) max_lag = 512;
+    // ESP32-C3 没有浮点单元:整个相关运算用整数做。先 2:1 降采样到 sample_rate/2,
+    // 再做 McLeod NSDF:nsdf(t) = 2*r(t) / m(t),取第一个超过 0.85*最大值的峰。
+    // 16 kHz、1024 点时约 155 个延迟 × 512 点 ≈ 8 万次整数乘加(原来是 50 万次软件双精度)。
+    enum { MAXD = 512, MAXLAG = 200 };
+    static int16_t d[MAXD];
+    static float nsdf[MAXLAG];
     if (clarity) *clarity = 0.0f;
-    if (dsp_dbfs(pcm, n) < -50.0f) return 0.0f;   // 太安静
+    int m = n / 2;
+    if (m > MAXD) m = MAXD;
+    const int rate = sample_rate / 2;
+    int64_t energy = 0;
+    for (int i = 0; i < m; i++) {
+        d[i] = (int16_t)(((int32_t)pcm[2 * i] + pcm[2 * i + 1]) >> 2);   // 平均并 /2 防溢出
+        energy += (int32_t)d[i] * d[i];
+    }
+    // 太安静(约 -50 dBFS 以下)不算音高
+    if (energy < (int64_t)m * 30 * 30) return 0.0f;
 
+    const int min_lag = rate / 1200;
+    int max_lag = rate / 50;
+    if (max_lag > m / 2) max_lag = m / 2;
+    if (max_lag > MAXLAG) max_lag = MAXLAG;
+
+    // m(t) 可以递推:m(t+1) = m(t) - d[t]^2 - d[m-1-t]^2
+    int64_t mt = 2 * energy;
     float best = 0.0f;
     for (int t = 0; t < max_lag; t++) {
-        double r = 0.0, m = 0.0;
-        for (int i = 0; i + t < n; i++) {
-            r += (double)pcm[i] * pcm[i + t];
-            m += (double)pcm[i] * pcm[i] + (double)pcm[i + t] * pcm[i + t];
-        }
-        nsdf[t] = m > 0 ? (float)(2.0 * r / m) : 0.0f;
+        int64_t r = 0;
+        const int16_t *a0 = d, *a1 = d + t;
+        for (int i = 0; i < m - t; i++) r += (int32_t)a0[i] * a1[i];
+        nsdf[t] = mt > 0 ? (float)(2 * r) / (float)mt : 0.0f;
         if (t >= min_lag && nsdf[t] > best) best = nsdf[t];
+        mt -= (int32_t)d[t] * d[t] + (int32_t)d[m - 1 - t] * d[m - 1 - t];
     }
     if (best < 0.5f) return 0.0f;
     const float thresh = 0.85f * best;
-    for (int t = min_lag; t < max_lag - 1; t++) {
+    for (int t = min_lag < 1 ? 1 : min_lag; t < max_lag - 1; t++) {
         if (nsdf[t] >= thresh && nsdf[t] >= nsdf[t - 1] && nsdf[t] >= nsdf[t + 1]) {
-            // 抛物线插值求亚样本峰位
             const float a = nsdf[t - 1], b = nsdf[t], c = nsdf[t + 1];
             const float denom = a - 2 * b + c;
             const float shift = denom != 0.0f ? 0.5f * (a - c) / denom : 0.0f;
             if (clarity) *clarity = b;
-            return (float)sample_rate / ((float)t + shift);
+            return (float)rate / ((float)t + shift);
         }
     }
     return 0.0f;

@@ -128,8 +128,8 @@ static void update_status(void)
         card_message(&IC_CLOUD_OFF, "还没连接无线网络", "在 设置 › 无线网络 里用手机配置");
     } else if (net_state() != NET_CONNECTED) {
         card_message(&WX_CLOUD, "正在联网…", NULL);
-    } else if (relay_state() != SRV_OK) {
-        card_message(&IC_CLOUD_OFF, "找不到中转服务器", "请在家里电脑上启动中转服务");
+    } else if (!relay_ready()) {
+        card_message(&IC_CLOUD_OFF, "暂时连不上网络", "稍后按确定键重试");
     } else {
         card_message(&WX_CLOUD, "正在获取天气…", NULL);
     }
@@ -137,7 +137,7 @@ static void update_status(void)
 
 static void request(void)
 {
-    if (s_req >= 0 || relay_state() != SRV_OK) return;
+    if (s_req >= 0 || !relay_ready()) return;
     s_req = relay_request("/api/weather", NULL);
 }
 
@@ -229,7 +229,7 @@ static bool key(sys_key_t k, sys_key_ev_t ev)
         return true;
     }
     if (k == SYS_KEY_OK && ev == SYS_EV_CLICK) {
-        if (relay_state() != SRV_OK) relay_discover();
+        if (!relay_ready()) relay_discover();
         request();
         shell_toast("正在刷新天气");
         return true;
@@ -255,9 +255,9 @@ static void tick(int64_t now)
             last_net = ns;
             last_srv = ss;
             if (!s_night) update_status();
-            if (ss == SRV_OK && now - s_cache_ms >= REFRESH_MS) request();
+            if (relay_ready() && now - s_cache_ms >= REFRESH_MS) request();
         }
-        if (ss == SRV_OK && now - s_cache_ms >= REFRESH_MS) request();
+        if (relay_ready() && now - s_cache_ms >= REFRESH_MS) request();
         return;
     }
     const char *body;

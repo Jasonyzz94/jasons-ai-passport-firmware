@@ -176,6 +176,7 @@ static void build_tuner(lv_obj_t *p)
     s_last_pitch_ms = 0;
     shell_hints("长▲:返回");
     audio_analyze_start();
+    audio_analyze_pitch(true);
 }
 
 static void tick_tuner(int64_t now)

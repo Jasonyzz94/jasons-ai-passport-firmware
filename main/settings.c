@@ -23,6 +23,19 @@ static void defaults(void)
     g_settings.sound_feedback = 1;
     snprintf(g_settings.tz, sizeof(g_settings.tz), "CST-8");
     snprintf(g_settings.name, sizeof(g_settings.name), "Passport-%s", sys_short_id());
+    // 默认云服务:硅基流动(国内可直连,一个密钥同时提供识别 / 对话 / 合成)。
+    snprintf(g_settings.api_base, sizeof(g_settings.api_base), "https://api.siliconflow.cn/v1");
+    snprintf(g_settings.asr_model, sizeof(g_settings.asr_model), "FunAudioLLM/SenseVoiceSmall");
+    snprintf(g_settings.llm_model, sizeof(g_settings.llm_model), "deepseek-ai/DeepSeek-V3");
+    snprintf(g_settings.tts_model, sizeof(g_settings.tts_model), "FunAudioLLM/CosyVoice2-0.5B");
+    snprintf(g_settings.tts_voice, sizeof(g_settings.tts_voice), "FunAudioLLM/CosyVoice2-0.5B:anna");
+}
+
+// 读字符串设置:存储里是空串时保留默认值(避免旧版本写入的空值覆盖默认)。
+static void load_str(const char *key, char *dst, size_t len)
+{
+    char buf[200];
+    if (sys_kv_get_str(key, buf, sizeof(buf)) && buf[0]) snprintf(dst, len, "%s", buf);
 }
 
 void settings_load(void)
@@ -45,6 +58,18 @@ void settings_load(void)
     if (sys_kv_get_str("name", name, sizeof(name)) && name[0]) {
         snprintf(g_settings.name, sizeof(g_settings.name), "%s", name);
     }
+    load_str("city", g_settings.city, sizeof(g_settings.city));
+    load_str("lat", g_settings.lat, sizeof(g_settings.lat));
+    load_str("lon", g_settings.lon, sizeof(g_settings.lon));
+    load_str("api_base", g_settings.api_base, sizeof(g_settings.api_base));
+    sys_kv_get_str("api_key", g_settings.api_key, sizeof(g_settings.api_key));
+    load_str("asr_model", g_settings.asr_model, sizeof(g_settings.asr_model));
+    load_str("llm_model", g_settings.llm_model, sizeof(g_settings.llm_model));
+    load_str("tts_model", g_settings.tts_model, sizeof(g_settings.tts_model));
+    load_str("tts_voice", g_settings.tts_voice, sizeof(g_settings.tts_voice));
+    sys_kv_get_str("ha_url", g_settings.ha_url, sizeof(g_settings.ha_url));
+    sys_kv_get_str("ha_token", g_settings.ha_token, sizeof(g_settings.ha_token));
+    sys_kv_get_str("ha_ents", g_settings.ha_entities, sizeof(g_settings.ha_entities));
 }
 
 void settings_save(void)
@@ -59,6 +84,18 @@ void settings_save(void)
     sys_kv_set_str("token", g_settings.token);
     sys_kv_set_str("tz", g_settings.tz);
     sys_kv_set_str("name", g_settings.name);
+    sys_kv_set_str("city", g_settings.city);
+    sys_kv_set_str("lat", g_settings.lat);
+    sys_kv_set_str("lon", g_settings.lon);
+    sys_kv_set_str("api_base", g_settings.api_base);
+    sys_kv_set_str("api_key", g_settings.api_key);
+    sys_kv_set_str("asr_model", g_settings.asr_model);
+    sys_kv_set_str("llm_model", g_settings.llm_model);
+    sys_kv_set_str("tts_model", g_settings.tts_model);
+    sys_kv_set_str("tts_voice", g_settings.tts_voice);
+    sys_kv_set_str("ha_url", g_settings.ha_url);
+    sys_kv_set_str("ha_token", g_settings.ha_token);
+    sys_kv_set_str("ha_ents", g_settings.ha_entities);
 }
 
 void settings_factory_reset(void)
