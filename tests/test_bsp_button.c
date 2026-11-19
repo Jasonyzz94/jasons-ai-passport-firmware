@@ -25,11 +25,14 @@ esp_err_t adc_oneshot_config_channel(adc_oneshot_unit_handle_t h, int channel, c
     assert(h == &adc_token && channel == BSP_BTN_ADC_CHANNEL && cfg->atten == ADC_ATTEN_DB_12);
     return fail_channel ? ESP_FAIL : ESP_OK;
 }
+static int spike_every;   // >0: every Nth raw read returns a spike voltage
+static int spike_mv;
 esp_err_t adc_oneshot_read(adc_oneshot_unit_handle_t h, int channel, int *raw) {
     assert(h == &adc_token && adc_live && channel == BSP_BTN_ADC_CHANNEL);
     ++reads;
     if (fail_read) return ESP_FAIL;
-    *raw = raw_mv; return ESP_OK;
+    *raw = (spike_every && reads % spike_every == 0) ? spike_mv : raw_mv;
+    return ESP_OK;
 }
 esp_err_t adc_cali_create_scheme_curve_fitting(const adc_cali_curve_fitting_config_t *cfg, adc_cali_handle_t *h) {
     assert(adc_live && !cal_live && cfg->atten == ADC_ATTEN_DB_12);
@@ -186,7 +189,21 @@ static void check_voltage(int mv, int expected) {
     assert(hold(mv, 200) == expected);   // longer than confirm and hold windows
     const int before = reads;
     assert(poll() == expected);
-    assert(reads - before == CONFIG_ADC_BUTTON_SAMPLE_TIMES);   // one shared sample
+    assert(reads - before == BSP_BTN_MEDIAN_SAMPLES);   // one shared median sample
+}
+
+// Wi-Fi RF noise: occasional single-read spikes into a neighbouring window must
+// neither block confirming a press nor change the decoded key.
+static void check_spike_rejection(void) {
+    assert(hold(3300, 200) == -1);
+    spike_every = 3;            // about 2 of every 7 reads are spikes (median ignores them)
+    spike_mv = 300;             // DOWN window, while UP is pressed
+    assert(hold(50, 60) == 0);  // confirmed within the normal 40 ms window
+    assert(hold(50, 200) == 0);
+    spike_mv = 3300;            // released-level spikes while holding OK
+    assert(hold(600, 200) == 2);
+    spike_every = 0;
+    assert(hold(3300, 300) == -1);
 }
 
 // Issue #97: a contact break inside a held key sweeps the voltage up through the
@@ -257,6 +274,7 @@ int main(void) {
     check_voltage(1900, -1); check_voltage(3300, -1);
     assert(bsp_button_read_mv() == 3300);
     check_key_lock();
+    check_spike_rejection();
     fail_read = 1; clock_us += 2000;
     for (int i = 0; i < BSP_BTN_COUNT; ++i) assert(!button_level(&s_drivers[i].base));
     assert(bsp_button_read_mv() == -1);

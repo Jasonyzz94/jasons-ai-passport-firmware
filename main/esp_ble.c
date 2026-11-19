@@ -46,7 +46,27 @@ static const uint8_t k_report_map[] = {
     0xC0,
 };
 
-typedef enum { ACT_KEY = 0, ACT_CONSUMER, ACT_TEXT, ACT_START, ACT_STOP } act_type_t;
+// 带 Apple Fn 的完整报告表:在上面两段之后追加 Apple 私有 "Top Case" 页的 Fn 键(报告 3,1 位)。
+// Mac 能否识别第三方设备的 Fn 取决于系统版本;若这张表让 HID 初始化失败,会自动退回上面的基础表。
+#define RPT_FN 3
+static const uint8_t k_report_map_fn[] = {
+    0x05, 0x01, 0x09, 0x06, 0xA1, 0x01, 0x85, RPT_KEYBOARD,
+    0x05, 0x07, 0x19, 0xE0, 0x29, 0xE7, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x08, 0x81, 0x02,
+    0x95, 0x01, 0x75, 0x08, 0x81, 0x01,
+    0x95, 0x06, 0x75, 0x08, 0x15, 0x00, 0x25, 0x65, 0x05, 0x07, 0x19, 0x00, 0x29, 0x65, 0x81, 0x00,
+    0xC0,
+    0x05, 0x0C, 0x09, 0x01, 0xA1, 0x01, 0x85, RPT_CONSUMER,
+    0x15, 0x00, 0x26, 0xFF, 0x03, 0x19, 0x00, 0x2A, 0xFF, 0x03, 0x75, 0x10, 0x95, 0x01, 0x81, 0x00,
+    0xC0,
+    0x06, 0xFF, 0x00, 0x09, 0x01, 0xA1, 0x01, 0x85, RPT_FN,          // Usage Page 0x00FF(Apple Top Case)
+    0x09, 0x03, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x01, 0x81, 0x02,   // Usage 0x03 = Fn
+    0x75, 0x07, 0x95, 0x01, 0x81, 0x03,                               // 补齐 7 位
+    0xC0,
+};
+static bool s_has_fn;
+static uint8_t s_held_mod;      // 正在按住的修饰键(语音键)
+
+typedef enum { ACT_KEY = 0, ACT_CONSUMER, ACT_TEXT, ACT_START, ACT_STOP, ACT_HOLD } act_type_t;
 typedef struct {
     act_type_t type;
     uint8_t key, mod;
@@ -139,10 +159,12 @@ static void host_task(void *param)
 // ---------------------------------------------------------------------------
 static void send_key(uint8_t key, uint8_t mod)
 {
-    uint8_t r[8] = {mod, 0, key, 0, 0, 0, 0, 0};
+    // 按住语音键时其他按键也带上它(例如按住 ⌘ 时单击 = ⌘+键)
+    uint8_t r[8] = {(uint8_t)(mod | s_held_mod), 0, key, 0, 0, 0, 0, 0};
     esp_hidd_dev_input_set(s_dev, 0, RPT_KEYBOARD, r, sizeof(r));
     vTaskDelay(pdMS_TO_TICKS(12));
     memset(r, 0, sizeof(r));
+    r[0] = s_held_mod;
     esp_hidd_dev_input_set(s_dev, 0, RPT_KEYBOARD, r, sizeof(r));
     vTaskDelay(pdMS_TO_TICKS(12));
 }
@@ -170,6 +192,18 @@ static void worker(void *arg)
         }
         switch (a.type) {
         case ACT_KEY: send_key(a.key, a.mod); break;
+        case ACT_HOLD: {
+            // mod = 修饰键位(0 表示 Fn),key = 1 按下 / 0 松开
+            if (a.mod) {
+                s_held_mod = a.key ? a.mod : 0;
+                uint8_t r[8] = {s_held_mod, 0, 0, 0, 0, 0, 0, 0};
+                esp_hidd_dev_input_set(s_dev, 0, RPT_KEYBOARD, r, sizeof(r));
+            } else if (s_has_fn) {
+                uint8_t fn = a.key ? 1 : 0;
+                esp_hidd_dev_input_set(s_dev, 0, RPT_FN, &fn, 1);
+            }
+            break;
+        }
         case ACT_CONSUMER: {
             uint8_t r[2] = {(uint8_t)(a.usage & 0xFF), (uint8_t)(a.usage >> 8)};
             esp_hidd_dev_input_set(s_dev, 0, RPT_CONSUMER, r, 2);
@@ -253,7 +287,10 @@ static bool do_start(void)
     ble_hs_cfg.sync_cb = on_sync;
     ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
 
-    static esp_hid_raw_report_map_t maps[] = {{.data = k_report_map, .len = sizeof(k_report_map)}};
+    // 先试带 Fn 的报告表,失败再退回基础表(都在 hid 任务里,不卡界面)。
+    static esp_hid_raw_report_map_t maps[1];
+    maps[0].data = k_report_map_fn;
+    maps[0].len = sizeof(k_report_map_fn);
     esp_hid_device_config_t cfg = {
         .vendor_id = 0x303A,
         .product_id = 0x8100,
@@ -264,7 +301,15 @@ static bool do_start(void)
         .report_maps = maps,
         .report_maps_len = 1,
     };
-    const esp_err_t herr = esp_hidd_dev_init(&cfg, ESP_HID_TRANSPORT_BLE, hidd_event, &s_dev);
+    esp_err_t herr = esp_hidd_dev_init(&cfg, ESP_HID_TRANSPORT_BLE, hidd_event, &s_dev);
+    s_has_fn = herr == ESP_OK;
+    if (herr != ESP_OK) {
+        ESP_LOGW(TAG, "带 Fn 的报告表初始化失败(%s),改用基础报告表", esp_err_to_name(herr));
+        maps[0].data = k_report_map;
+        maps[0].len = sizeof(k_report_map);
+        s_dev = NULL;
+        herr = esp_hidd_dev_init(&cfg, ESP_HID_TRANSPORT_BLE, hidd_event, &s_dev);
+    }
     if (herr != ESP_OK) {
         ESP_LOGE(TAG, "esp_hidd_dev_init 失败: %s(空闲 %u)", esp_err_to_name(herr),
                  (unsigned)sys_free_heap());
@@ -282,6 +327,7 @@ static bool do_start(void)
 
 static void do_stop(void)
 {
+    s_held_mod = 0;
     if (!s_running) return;
     s_running = false;
     ble_gap_adv_stop();
@@ -315,6 +361,15 @@ void ble_hid_stop(void)
     act_t a = {.type = ACT_STOP};
     xQueueSend(s_act, &a, pdMS_TO_TICKS(100));
 }
+
+// 按住 / 松开一个修饰键(语音键):modifier 为 HID 修饰位,0 表示 Apple Fn。
+void ble_hid_hold(uint8_t modifier, bool down)
+{
+    act_t a = {.type = ACT_HOLD, .mod = modifier, .key = down ? 1 : 0};
+    enqueue(&a);
+}
+
+bool ble_hid_has_fn(void) { return s_has_fn; }
 
 void ble_hid_forget(void)
 {

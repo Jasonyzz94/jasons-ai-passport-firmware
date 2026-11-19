@@ -168,6 +168,10 @@ void ble_hid_key(uint8_t keycode, uint8_t modifiers);   // 按下 + 抬起
 void ble_hid_consumer(uint16_t usage);                  // 按下 + 抬起
 // 逐字键入 ASCII 文本(非 ASCII 字符跳过;中文需要电脑输入法,HID 无法直接发送)。
 void ble_hid_type(const char *ascii);
+// 按住 / 松开一个修饰键(语音键用:物理键按多久,电脑上就按多久)。
+// modifier:HID 修饰位(0x80 右 ⌘、0x10 右 Control);0 表示 Apple Fn。
+void ble_hid_hold(uint8_t modifier, bool down);
+bool ble_hid_has_fn(void);      // 当前报告表是否带 Fn
 void ble_hid_forget(void);                              // 清除配对
 
 // ===========================================================================

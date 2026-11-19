@@ -70,6 +70,8 @@
 // - 空闲时,新窗口须连续稳定 CONFIRM 才认作按下(顺带跳过按下过程中扫过的中间档);
 // - 锁定某键后,任何别的读数(含松开态)须连续稳定 HOLD 才改判,短暂断触被吸收。
 // 代价:按下事件晚约 40ms、抬起事件晚约 120ms 上报;按下到抬起的时长相应多出约 80ms。
+// 每次轮询读 ADC 的次数,取中位数(奇数)。抗 Wi-Fi 射频造成的读数尖峰。
+#define BSP_BTN_MEDIAN_SAMPLES 7
 #define BSP_BTN_CONFIRM_MS   40
 #define BSP_BTN_HOLD_MS      120
 

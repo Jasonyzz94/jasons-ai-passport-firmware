@@ -94,22 +94,33 @@ static uint8_t button_level(button_driver_t *driver) {
     // Share one averaged reading, and one decoder step, across the three keys in a
     // polling cycle.
     if (!s_sample_valid || now - s_sample_time >= 1000) {
-        int sum = 0;
+        // 取 BSP_BTN_MEDIAN_SAMPLES 次读数的中位数:Wi-Fi 发射时 ADC 会出现尖峰,
+        // 单次读数容易跳到相邻键的电压窗口,让"连续稳定 40ms"的确认一再重来,
+        // 表现为开着 Wi-Fi 的页面按键迟钝、要用力按。中位数能直接剔除这些尖峰。
+        int raws[BSP_BTN_MEDIAN_SAMPLES];
         bool ok = true;
         s_sample_time = now;
         s_sample_valid = true;
         s_sample_mv = -1;
-        for (int i = 0; i < CONFIG_ADC_BUTTON_SAMPLE_TIMES; ++i) {
-            int raw;
-            if (adc_oneshot_read(s_adc, BSP_BTN_ADC_CHANNEL, &raw) != ESP_OK) {
+        for (int i = 0; i < BSP_BTN_MEDIAN_SAMPLES; ++i) {
+            if (adc_oneshot_read(s_adc, BSP_BTN_ADC_CHANNEL, &raws[i]) != ESP_OK) {
                 ok = false;
                 break;
             }
-            sum += raw;
         }
-        if (ok && adc_cali_raw_to_voltage(s_cali, sum / CONFIG_ADC_BUTTON_SAMPLE_TIMES,
-                                         &s_sample_mv) != ESP_OK) {
-            s_sample_mv = -1;
+        if (ok) {
+            for (int i = 1; i < BSP_BTN_MEDIAN_SAMPLES; ++i) {   // 插入排序,N 很小
+                const int v = raws[i];
+                int j = i - 1;
+                while (j >= 0 && raws[j] > v) {
+                    raws[j + 1] = raws[j];
+                    --j;
+                }
+                raws[j + 1] = v;
+            }
+            if (adc_cali_raw_to_voltage(s_cali, raws[BSP_BTN_MEDIAN_SAMPLES / 2], &s_sample_mv) != ESP_OK) {
+                s_sample_mv = -1;
+            }
         }
         (void)decoder_feed(&s_decoder, window_of(s_sample_mv), now);
     }

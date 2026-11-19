@@ -46,7 +46,7 @@ typedef struct {
 
 static const mode_info_t k_modes[MODE_COUNT] = {
     {"编程助手", "AI 编程一手遥控", &ICON_AI, "↑ 上一项", "回车 · 同意", "↓ 下一项", "",
-     "双击 切换计划模式", "长按打断  双击指令", "长按语音  双击换系统"},
+     NULL, "长按打断  双击指令", NULL},
     {"翻页笔", "演示文稿翻页", &IC_SLIDES, "上一页", "开始放映", "下一页", "",
      NULL, NULL, "长按 黑屏"},
     {"媒体", "音乐与视频", &IC_MUSIC, "音量 +", "播放 / 暂停", "音量 -", "",
@@ -62,6 +62,7 @@ typedef struct {
 } phrase_t;
 
 static const phrase_t k_phrases[] = {
+    {"切换计划/自动模式", NULL},    // 特殊项:发送 Shift+Tab
     {"继续", "continue"},
     {"同意", "yes"},
     {"跑测试并修复失败", "run the tests and fix any failures"},
@@ -90,6 +91,31 @@ static ble_state_t s_last = (ble_state_t)-1;
 
 static void build(page_t page);
 
+// 语音键:▼ 可设为"语音键"(按住 ▼ = 电脑上按住所选的键,松开即松开)或"向下 ↓"。
+typedef struct {
+    const char *name;
+    uint8_t modifier;   // 0 = Apple Fn
+} voice_key_t;
+static const voice_key_t k_voice_keys[] = {
+    {"Fn", 0x00},
+    {"右 Command", 0x80},
+    {"右 Control", 0x10},
+};
+#define VOICE_KEY_COUNT ((int)(sizeof(k_voice_keys) / sizeof(k_voice_keys[0])))
+static bool s_down_voice = true;
+static int s_voice_key;
+static bool s_holding;
+enum { ROW_DOWN_KEY = MODE_COUNT, ROW_VOICE_KEY };
+
+static void voice_release(void)
+{
+    if (s_holding) {
+        ble_hid_hold(k_voice_keys[s_voice_key].modifier, false);
+        s_holding = false;
+    }
+}
+
+
 // ---------------------------------------------------------------------------
 static lv_obj_t *status_card(lv_obj_t *p)
 {
@@ -110,6 +136,8 @@ static void build_modes(lv_obj_t *p)
     for (int i = 0; i < MODE_COUNT; i++) {
         ui_list_add(&s_list, k_modes[i].icon, k_modes[i].name, NULL, true);
     }
+    ui_list_add(&s_list, NULL, "▼ 键用途", s_down_voice ? "语音键" : "向下 ↓", false);
+    ui_list_add(&s_list, NULL, "语音键对应", k_voice_keys[s_voice_key].name, false);
     ui_list_focus(&s_list, s_mode, false);
     shell_hints("▲▼:选择|OK:进入|长▲:返回");
 }
@@ -135,22 +163,26 @@ static lv_obj_t *key_card(lv_obj_t *root, int y, int h, const char *glyph, int i
     return c;
 }
 
-static bool s_windows;   // 编程助手的"语音输入"发往 Windows(Win+H)还是 Mac(按两下右侧 ⌘)
-
 static void build_mode(lv_obj_t *p)
 {
     const mode_info_t *m = &k_modes[s_mode];
     status_card(p);
     lv_obj_t *title = ui_label_w(p, &ui_font_16, C_REMOTE, UI_W, LV_TEXT_ALIGN_CENTER, m->name);
     lv_obj_set_pos(title, 0, 62);
-    s_keys[0] = key_card(p, 86, 44, "▲", 0, m->up, m->up2);
+    const bool vibe = s_mode == MODE_VIBE;
+    char down_main[32];
+    snprintf(down_main, sizeof(down_main), "按住 = 按住 %s", k_voice_keys[s_voice_key].name);
+    s_keys[0] = key_card(p, 86, 44, "▲", 0, m->up,
+                         vibe ? (s_down_voice ? "双击 ↓ 下一项" : "双击 切换计划模式") : m->up2);
     s_keys[1] = key_card(p, 136, 52, "确定", 1, m->ok, m->ok2);
-    s_keys[2] = key_card(p, 194, 44, "▼", 2, m->down, m->down2);
+    s_keys[2] = key_card(p, 194, 44, "▼", 2, vibe && s_down_voice ? down_main : m->down,
+                         vibe ? (s_down_voice ? "语音输入 · 松开即松开" : NULL) : m->down2);
     lv_obj_t *extra = ui_label_w(p, &ui_font_14, C_TEXT3, UI_W - 2 * UI_PAD, LV_TEXT_ALIGN_CENTER,
                                  m->extra);
-    if (s_mode == MODE_VIBE) {
-        lv_label_set_text(extra, s_windows ? "语音输入:Windows(Win+H)"
-                                           : "Mac 听写快捷键请设为 按两下右⌘");
+    if (vibe) {
+        lv_label_set_text(extra, s_down_voice && s_voice_key == 0 && !ble_hid_has_fn()
+                                     ? "这台电脑不认 Fn,请在列表里改用 Command"
+                                     : "▼ 的用途与语音键可在上一页切换");
     }
     lv_obj_set_pos(extra, UI_PAD, 244);
     memset(s_flash_until, 0, sizeof(s_flash_until));
@@ -166,12 +198,13 @@ static void build_phrases(lv_obj_t *p)
     ui_list_focus(&s_list, 0, false);
     s_phrase_preview = ui_label_w(p, &ui_font_14, C_TEXT3, UI_W - 2 * UI_PAD, LV_TEXT_ALIGN_CENTER, "");
     lv_obj_set_pos(s_phrase_preview, UI_PAD, 226);
-    lv_label_set_text_fmt(s_phrase_preview, "键入:%s", k_phrases[0].text);
+    lv_label_set_text_fmt(s_phrase_preview, "键入:%s", k_phrases[0].text ? k_phrases[0].text : "Shift+Tab");
     shell_hints("▲▼:选择|OK:发送|长▲:返回");
 }
 
 static void build(page_t page)
 {
+    voice_release();
     if (s_page) lv_obj_delete(s_page);
     s_page = ui_box(s_root, 0, 0, UI_W, UI_CONTENT_H);
     s_kind = page;
@@ -186,7 +219,10 @@ static void build(page_t page)
 static void create(lv_obj_t *root)
 {
     s_root = root;
-    s_windows = sys_kv_get_i32("r_win", 0) != 0;
+    s_down_voice = sys_kv_get_i32("r_dv", 1) != 0;
+    s_voice_key = sys_kv_get_i32("r_vk", 0);
+    if (s_voice_key < 0 || s_voice_key >= VOICE_KEY_COUNT) s_voice_key = 0;
+    s_holding = false;
     s_page = NULL;
     build(PAGE_MODES);
     if (!ble_hid_start()) shell_toast("蓝牙启动失败");
@@ -194,6 +230,7 @@ static void create(lv_obj_t *root)
 
 static void destroy(void)
 {
+    voice_release();
     ble_hid_stop();
     s_root = NULL;
     s_page = NULL;
@@ -220,40 +257,38 @@ static bool mode_key(sys_key_t k, sys_key_ev_t ev)
     const bool lng = ev == SYS_EV_LONG;
 
     if (s_mode == MODE_VIBE) {
-        // ▲ 单击 ↑ · 双击 Shift+Tab   确定 单击 回车 · 长按 Esc · 双击 快捷指令
-        // ▼ 单击 ↓ · 长按 语音输入 · 双击 切换 Mac/Windows        (长按 ▲ = 返回)
+        // ▲ 单击 ↑ · 双击 ↓(▼ 是语音键时)或 Shift+Tab · 长按 返回
+        // 确定 单击 回车 · 长按 Esc · 双击 快捷指令
+        // ▼ 语音键:按下即按下所选键,松开即松开(短按=短按,长按=长按);或普通 ↓
         const bool dbl = ev == SYS_EV_DOUBLE;
+        if (k == SYS_KEY_DOWN && s_down_voice) {
+            if (ev == SYS_EV_PRESS && !s_holding) {
+                if (!connected()) return true;
+                ble_hid_hold(k_voice_keys[s_voice_key].modifier, true);
+                s_holding = true;
+                flash(2);
+                s_flash_until[2] = INT64_MAX;   // 按住期间一直高亮
+            } else if (ev == SYS_EV_RELEASE && s_holding) {
+                voice_release();
+                s_flash_until[2] = sys_now_ms();
+            }
+            return true;   // ▼ 的单击/长按/双击都由按下-松开表达,不再另作处理
+        }
         if (k == SYS_KEY_OK && dbl) {
             build(PAGE_PHRASES);
             return true;
         }
-        if (k == SYS_KEY_DOWN && dbl) {
-            s_windows = !s_windows;
-            sys_kv_set_i32("r_win", s_windows);
-            shell_toast(s_windows ? "语音输入:Windows" : "语音输入:Mac");
-            if (shell_screen_on()) build(PAGE_MODE);
-            return true;
-        }
-        if (ev != SYS_EV_CLICK && !dbl && !(lng && k != SYS_KEY_UP)) return false;
+        if (ev != SYS_EV_CLICK && !dbl && !(lng && k == SYS_KEY_OK)) return false;
         if (!connected()) return true;
         if (k == SYS_KEY_UP) {
-            if (dbl) ble_hid_key(KEY_TAB, MOD_SHIFT);
+            if (dbl) ble_hid_key(s_down_voice ? KEY_DOWN : KEY_TAB, s_down_voice ? 0 : MOD_SHIFT);
             else ble_hid_key(KEY_UP, 0);
         } else if (k == SYS_KEY_OK) {
             ble_hid_key(lng ? KEY_ESC : KEY_ENTER, 0);
-        } else if (lng) {
-            if (s_windows) {
-                ble_hid_key(0x0B, 0x08);          // Win + H
-            } else {
-                ble_hid_key(0x00, 0x80);          // 右侧 ⌘ 按两下(Mac 听写快捷键)
-                ble_hid_key(0x00, 0x80);
-            }
-            shell_toast("语音输入");
+            if (lng) shell_toast("已打断");
         } else {
             ble_hid_key(KEY_DOWN, 0);
         }
-        if (dbl) shell_toast("已切换模式");
-        else if (lng && k == SYS_KEY_OK) shell_toast("已打断");
         flash(idx);
         return true;
     }
@@ -283,7 +318,15 @@ static bool key(sys_key_t k, sys_key_ev_t ev)
     switch (s_kind) {
     case PAGE_MODES:
         if (ev != SYS_EV_CLICK) return false;
-        if (k == SYS_KEY_OK) {
+        if (k == SYS_KEY_OK && s_list.focus == ROW_DOWN_KEY) {
+            s_down_voice = !s_down_voice;
+            sys_kv_set_i32("r_dv", s_down_voice);
+            ui_list_set_value(&s_list, ROW_DOWN_KEY, s_down_voice ? "语音键" : "向下 ↓");
+        } else if (k == SYS_KEY_OK && s_list.focus == ROW_VOICE_KEY) {
+            s_voice_key = (s_voice_key + 1) % VOICE_KEY_COUNT;
+            sys_kv_set_i32("r_vk", s_voice_key);
+            ui_list_set_value(&s_list, ROW_VOICE_KEY, k_voice_keys[s_voice_key].name);
+        } else if (k == SYS_KEY_OK) {
             s_mode = s_list.focus;
             build(PAGE_MODE);
         } else {
@@ -298,14 +341,19 @@ static bool key(sys_key_t k, sys_key_ev_t ev)
         if (ev != SYS_EV_CLICK) return true;
         if (k == SYS_KEY_OK) {
             if (connected()) {
-                ble_hid_type(k_phrases[s_list.focus].text);
-                ble_hid_key(KEY_ENTER, 0);
+                if (k_phrases[s_list.focus].text) {
+                    ble_hid_type(k_phrases[s_list.focus].text);
+                    ble_hid_key(KEY_ENTER, 0);
+                } else {
+                    ble_hid_key(KEY_TAB, MOD_SHIFT);
+                }
                 shell_toast("已发送");
             }
             build(PAGE_MODE);
         } else {
             ui_list_move(&s_list, k == SYS_KEY_DOWN ? 1 : -1);
-            lv_label_set_text_fmt(s_phrase_preview, "键入:%s", k_phrases[s_list.focus].text);
+            lv_label_set_text_fmt(s_phrase_preview, "键入:%s",
+                                  k_phrases[s_list.focus].text ? k_phrases[s_list.focus].text : "Shift+Tab");
         }
         return true;
     default:
