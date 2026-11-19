@@ -358,11 +358,31 @@ static void tick(int64_t now)
             }
         }
         portal_render();
+        // 连上后多留 6 秒热点,让手机网页能看到"连接成功";密码错误时提示并允许重新提交。
+        static int64_t s_connected_at;
+        static bool s_fail_shown;
         if (net_portal_state() == PORTAL_SAVED && net_state() == NET_CONNECTED) {
-            leave_portal();
-            audio_beep(BEEP_OK);
-            shell_toast("无线网络已连接");
-            build(PAGE_LIST);
+            if (!s_connected_at) {
+                s_connected_at = now;
+                audio_beep(BEEP_OK);
+                lv_label_set_text(s_step, "连接成功");
+                lv_label_set_text_fmt(s_portal_status, "地址 %s,马上返回", net_ip());
+            } else if (now - s_connected_at > 6000) {
+                s_connected_at = 0;
+                leave_portal();
+                shell_toast("无线网络已连接");
+                build(PAGE_LIST);
+            }
+        } else if (net_portal_state() == PORTAL_SAVED && net_state() == NET_FAILED) {
+            if (!s_fail_shown) {
+                s_fail_shown = true;
+                audio_beep(BEEP_ERR);
+                lv_label_set_text(s_step, "连接失败");
+                lv_label_set_text_fmt(s_portal_status, "连不上 %s,请在手机上改密码后重新保存",
+                                      g_settings.wifi_ssid);
+            }
+        } else {
+            s_fail_shown = false;
         }
     } else if (now - last > 1000) {
         last = now;

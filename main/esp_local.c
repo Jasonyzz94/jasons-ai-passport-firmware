@@ -110,12 +110,64 @@ static bool geolocate(char *buf, int cap)
     return ok;
 }
 
+// 只填了城市名(没有经纬度):用 Open-Meteo 地名搜索查经纬度,结果按城市名缓存。
+static char s_geo_for_city[24];
+
+static void url_encode(char *out, size_t len, const char *in)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    size_t o = 0;
+    for (const unsigned char *p = (const unsigned char *)in; *p && o + 4 < len; p++) {
+        if ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '-') {
+            out[o++] = (char)*p;
+        } else {
+            out[o++] = '%';
+            out[o++] = hex[*p >> 4];
+            out[o++] = hex[*p & 15];
+        }
+    }
+    out[o] = '\0';
+}
+
+static bool geocode_city(char *buf, int cap)
+{
+    if (s_geo_lat[0] && !strcmp(s_geo_for_city, g_settings.city)) return true;
+    char q[80], url[200];
+    url_encode(q, sizeof(q), g_settings.city);
+    snprintf(url, sizeof(url),
+             "https://geocoding-api.open-meteo.com/v1/search?name=%s&count=1&language=zh&format=json", q);
+    if (local_http(url, NULL, NULL, buf, cap, 8000) != 200) return false;
+    cJSON *j = cJSON_Parse(buf);
+    const cJSON *r = cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(j, "results"), 0);
+    const cJSON *lat = cJSON_GetObjectItemCaseSensitive(r, "latitude");
+    const cJSON *lon = cJSON_GetObjectItemCaseSensitive(r, "longitude");
+    const bool ok = cJSON_IsNumber(lat) && cJSON_IsNumber(lon);
+    if (ok) {
+        snprintf(s_geo_lat, sizeof(s_geo_lat), "%.3f", lat->valuedouble);
+        snprintf(s_geo_lon, sizeof(s_geo_lon), "%.3f", lon->valuedouble);
+        snprintf(s_geo_city, sizeof(s_geo_city), "%s", g_settings.city);
+        snprintf(s_geo_for_city, sizeof(s_geo_for_city), "%s", g_settings.city);
+        ESP_LOGI(TAG, "城市 %s → %s,%s", g_settings.city, s_geo_lat, s_geo_lon);
+    } else {
+        ESP_LOGW(TAG, "找不到城市 %s,改用网络定位", g_settings.city);
+    }
+    cJSON_Delete(j);
+    return ok;
+}
+
 static int weather(char *out, int cap)
 {
     char *buf = malloc(FETCH_MAX);
     if (!buf) return 503;
+    // 位置优先级:手填经纬度 > 城市名查经纬度 > 按网络 IP 自动定位
     const bool manual = g_settings.lat[0] && g_settings.lon[0];
-    if (!manual && !geolocate(buf, FETCH_MAX)) {
+    bool located = manual;
+    if (!located && g_settings.city[0]) located = geocode_city(buf, FETCH_MAX);
+    if (!located && strcmp(s_geo_for_city, "") != 0) {
+        s_geo_lat[0] = '\0';   // 城市查不到时清掉旧结果,重新按 IP 定位
+        s_geo_for_city[0] = '\0';
+    }
+    if (!located && !geolocate(buf, FETCH_MAX)) {
         free(buf);
         return 502;
     }

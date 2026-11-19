@@ -12,6 +12,7 @@
 #include "esp_netif.h"
 #include "esp_netif_sntp.h"
 #include "esp_wifi.h"
+#include "lwip/sockets.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
@@ -219,43 +220,70 @@ static void apply(void)
 // ---------------------------------------------------------------------------
 // 配网门户(SoftAP + 一个网页表单)
 // ---------------------------------------------------------------------------
-// 配网页:附近网络列表(按信号排序、同名合并,点一下填入)+ 高级设置(云端密钥、位置、家居)。
-static const char k_page_head[] =
+// ===========================================================================
+// 配置网页(手机连上设备热点后自动弹出)。所有文字只在手机上显示。 glyph-check: ignore
+// ===========================================================================
+static const char k_css[] =   // glyph-check: ignore
     "<!doctype html><html lang=zh><head><meta charset=utf-8>"
-    "<meta name=viewport content='width=device-width,initial-scale=1'><title>工具箱设置</title>"
-    "<style>body{font-family:-apple-system,system-ui,sans-serif;background:#0b0e14;color:#f1f4f9;"
-    "margin:0;padding:20px}h1{font-size:22px;margin:4px 0 12px}h2{font-size:16px;color:#a3adbd;margin:22px 0 4px}"
-    "label{display:block;margin:12px 0 6px;color:#a3adbd;font-size:14px}"
+    "<meta name=viewport content='width=device-width,initial-scale=1'><title>工具箱设置</title><style>"
+    "body{font-family:-apple-system,system-ui,sans-serif;background:#0b0e14;color:#f1f4f9;margin:0;padding:16px}"
+    "h1{font-size:22px;margin:6px 0 2px}.sub{color:#667185;font-size:13px;margin-bottom:12px}"
+    ".card{background:#151a23;border:1px solid #2a3241;border-radius:16px;padding:14px;margin:12px 0}"
+    ".card h2{font-size:16px;margin:0 0 8px}.row{display:flex;justify-content:space-between;padding:4px 0;"
+    "font-size:14px}.k{color:#a3adbd}.ok{color:#34d399}.warn{color:#fbbf24}"
+    "label{display:block;margin:10px 0 6px;color:#a3adbd;font-size:13px}"
     "input,select{width:100%;box-sizing:border-box;padding:12px;border-radius:10px;border:1px solid #2a3241;"
-    "background:#151a23;color:#f1f4f9;font-size:16px}"
-    ".ap{display:flex;justify-content:space-between;padding:12px 14px;margin:6px 0;border-radius:10px;"
-    "background:#151a23;border:1px solid #2a3241}.ap:active,.ap.on{border-color:#ff6b57}.s{color:#667185}"
-    "button{margin-top:22px;width:100%;padding:14px;border:0;border-radius:12px;background:#ff6b57;"
-    "color:#0b0e14;font-size:17px;font-weight:600}.ghost{background:#1e2531;color:#f1f4f9;margin-top:8px}"
-    "details{margin-top:18px}summary{color:#ff6b57;font-size:16px;padding:8px 0}"
-    "p{color:#667185;font-size:13px;line-height:1.5}</style></head><body>"
-    "<h1>工具箱设置</h1><form method=post action=/save id=f><h2>无线网络(点选或手动输入)</h2>";
+    "background:#0b0e14;color:#f1f4f9;font-size:16px}.pw{display:flex;gap:8px}.pw input{flex:1}"
+    ".pw button,.ghost{width:auto;margin:0;padding:0 14px;background:#1e2531;color:#f1f4f9;border:0;"
+    "border-radius:10px;font-size:14px}.ap{display:flex;justify-content:space-between;padding:11px 12px;"
+    "margin:6px 0;border-radius:10px;background:#0b0e14;border:1px solid #2a3241}.ap.on{border-color:#ff6b57}"
+    ".s{color:#667185}details summary{color:#a3adbd;font-size:14px;padding:6px 0}"
+    ".go{margin-top:6px;width:100%;padding:15px;border:0;border-radius:12px;background:#ff6b57;color:#0b0e14;"
+    "font-size:17px;font-weight:600}#msg{display:none;padding:12px;border-radius:12px;margin:12px 0;"
+    "font-size:15px}p{color:#667185;font-size:13px;line-height:1.5;margin:6px 0}</style></head><body>";
 
-static const char k_page_mid[] =
-    "<a href=/rescan><button type=button class=ghost onclick=\"location='/rescan'\">重新扫描</button></a>"
-    "<label>网络名称(隐藏网络可手动输入;只改高级设置就留空)</label><input name=ssid id=ssid>"
-    "<label>密码</label><input name=pass type=password placeholder='留空表示无密码或不修改'>"
-    "<details><summary>高级设置(不用家里的服务器也能用)</summary>"
-    "<h2>语音助手 · 云端接口(兼容 OpenAI)</h2>"
-    "<p>没有家里的服务器时,设备直接调用云端完成 识别 → 对话 → 朗读。默认是硅基流动"
-    "(siliconflow.cn,注册后创建密钥),也可换成其他兼容接口。</p>";
+// 常用城市经纬度(手机上直接选,不需要联网)
+static const char k_cities[] =   // glyph-check: ignore
+    "北京,39.90,116.41|上海,31.23,121.47|广州,23.13,113.26|深圳,22.54,114.06|杭州,30.27,120.16|"
+    "南京,32.06,118.80|苏州,31.30,120.59|成都,30.57,104.07|重庆,29.56,106.55|武汉,30.59,114.31|"
+    "西安,34.34,108.94|天津,39.13,117.20|长沙,28.23,112.94|郑州,34.75,113.63|青岛,36.07,120.38|"
+    "厦门,24.48,118.09|福州,26.07,119.30|合肥,31.82,117.23|济南,36.65,117.12|宁波,29.87,121.54|"
+    "无锡,31.49,120.31|东莞,23.02,113.75|佛山,23.02,113.12|珠海,22.27,113.58|沈阳,41.80,123.43|"
+    "大连,38.91,121.61|哈尔滨,45.80,126.53|长春,43.82,125.32|昆明,25.04,102.71|贵阳,26.65,106.63|"
+    "南宁,22.82,108.32|海口,20.04,110.32|三亚,18.25,109.51|南昌,28.68,115.86|太原,37.87,112.55|"
+    "石家庄,38.04,114.51|兰州,36.06,103.83|乌鲁木齐,43.83,87.62|拉萨,29.65,91.17|呼和浩特,40.84,111.75|"
+    "银川,38.49,106.23|西宁,36.62,101.78|香港,22.32,114.17|澳门,22.20,113.55|台北,25.03,121.57";
 
-static const char k_page_tail[] =
-    "<h2>天气位置</h2><p>不填则按网络位置自动定位。</p>"
-    "<h2>家庭助手(Home Assistant)</h2><p>长期访问令牌在 HA 个人资料页底部创建;实体用逗号分隔。</p>"
-    "%s</details>"
-    "<button>保存</button></form><p>保存后设备会自动连接,看设备屏幕上的结果。</p>"
-    "<script>document.querySelectorAll('.ap').forEach(e=>e.onclick=()=>{"
-    "document.querySelectorAll('.ap').forEach(x=>x.classList.remove('on'));e.classList.add('on');"
-    "document.getElementById('ssid').value=e.dataset.s;document.querySelector('[name=pass]').focus()})</script>"
-    "</body></html>";
+static const char k_script[] =   // glyph-check: ignore
+    "<script>"
+    "const $=q=>document.querySelector(q);"
+    "document.querySelectorAll('.ap').forEach(e=>e.onclick=()=>{document.querySelectorAll('.ap')"
+    ".forEach(x=>x.classList.remove('on'));e.classList.add('on');$('#ssid').value=e.dataset.s;$('#pass').focus()});"
+    "document.querySelectorAll('.eye').forEach(b=>b.onclick=()=>{const i=b.previousElementSibling;"
+    "i.type=i.type=='password'?'text':'password';b.textContent=i.type=='password'?'显示':'隐藏'});"
+    "const cs=$('#cities').dataset.c.split('|').map(x=>x.split(','));const sel=$('#cities');"
+    "cs.forEach(c=>{const o=document.createElement('option');o.value=c.join(',');o.textContent=c[0];sel.add(o)});"
+    "sel.onchange=()=>{const v=sel.value;if(v=='auto'){$('[name=city]').value='';$('[name=lat]').value='';"
+    "$('[name=lon]').value=''}else if(v=='typed'){$('[name=lat]').value='';$('[name=lon]').value='';"
+    "$('[name=city]').focus()}else{const c=v.split(',');$('[name=city]').value=c[0];$('[name=lat]').value=c[1];"
+    "$('[name=lon]').value=c[2]}};"
+    "$('[name=city]').oninput=()=>{$('[name=lat]').value='';$('[name=lon]').value='';sel.value='typed'};"
+    "$('#prov').onchange=()=>{if($('#prov').value=='sf'){$('[name=api_base]').value='https://api.siliconflow.cn/v1';"
+    "$('[name=llm_model]').value='deepseek-ai/DeepSeek-V3';$('[name=asr_model]').value='FunAudioLLM/SenseVoiceSmall';"
+    "$('[name=tts_model]').value='FunAudioLLM/CosyVoice2-0.5B';$('[name=tts_voice]').value='FunAudioLLM/CosyVoice2-0.5B:anna'}};"
+    "const msg=(t,c)=>{const m=$('#msg');m.style.display='block';m.style.background=c;m.textContent=t;"
+    "m.scrollIntoView({behavior:'smooth'})};"
+    "$('#f').onsubmit=async e=>{e.preventDefault();msg('正在保存…','#1e2531');"
+    "try{await fetch('/save',{method:'POST',body:new URLSearchParams(new FormData($('#f')))})}"
+    "catch(_){msg('保存失败,请重试','#7f1d1d');return}"
+    "if(!$('#ssid').value){msg('已保存。设备上可以返回了。','#065f46');return}"
+    "msg('已保存,正在连接 '+$('#ssid').value+' …(手机可能会短暂断开,请看设备屏幕)','#1e2531');"
+    "for(let i=0;i<40;i++){await new Promise(r=>setTimeout(r,1500));try{const s=await(await fetch('/status')).json();"
+    "if(s.net=='connected'){msg('连接成功!设备地址 '+s.ip+'。可以关掉这个页面了。','#065f46');return}"
+    "if(s.net=='failed'){msg('连不上 '+s.ssid+',请检查密码后重新保存。','#7f1d1d');return}}catch(_){}}"
+    "msg('还没有结果,请看设备屏幕。','#1e2531')}"
+    "</script></body></html>";
 
-// 门户提交结果(httpd 任务写,LVGL 任务取)
 static portal_form_t s_form;
 
 static void html_escape(char *out, size_t len, const char *in)
@@ -274,21 +302,56 @@ static void html_escape(char *out, size_t len, const char *in)
     out[o] = '\0';
 }
 
-static void field(httpd_req_t *req, const char *label, const char *name, const char *value, bool secret)
+static void chunk(httpd_req_t *req, const char *text) { httpd_resp_send_chunk(req, text, HTTPD_RESP_USE_STRLEN); }
+
+// 输入框:secret 字段不回显已保存的值,只提示"已保存,留空不变"。 glyph-check: ignore
+static void field(httpd_req_t *req, const char *label, const char *name, const char *value,
+                  bool secret, const char *placeholder)
 {
-    char esc[220], buf[420];
+    char esc[220], buf[600];
     html_escape(esc, sizeof(esc), secret ? "" : value);
-    snprintf(buf, sizeof(buf), "<label>%s</label><input name=%s value=\"%s\"%s>", label, name, esc,
-             secret ? (value[0] ? " type=password placeholder='已保存,留空不变'" : " type=password") : "");
-    httpd_resp_send_chunk(req, buf, HTTPD_RESP_USE_STRLEN);
+    const char *ph = secret && value[0] ? "已保存,留空不变" : (placeholder ? placeholder : "");  // glyph-check: ignore
+    if (secret) {
+        snprintf(buf, sizeof(buf), "<label>%s</label><div class=pw><input name=%s type=password "  // glyph-check: ignore
+                 "placeholder='%s' autocomplete=off><button type=button class=eye>显示</button></div>",  // glyph-check: ignore
+                 label, name, ph);
+    } else {
+        snprintf(buf, sizeof(buf), "<label>%s</label><input name=%s value=\"%s\" placeholder='%s'>",
+                 label, name, esc, ph);
+    }
+    chunk(req, buf);
+}
+
+static void status_row(httpd_req_t *req, const char *k, const char *v, const char *cls)
+{
+    char esc[100], buf[260];
+    html_escape(esc, sizeof(esc), v);
+    snprintf(buf, sizeof(buf), "<div class=row><span class=k>%s</span><span class=%s>%s</span></div>", k, cls, esc);
+    chunk(req, buf);
 }
 
 static esp_err_t page_get(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
-    httpd_resp_send_chunk(req, k_page_head, HTTPD_RESP_USE_STRLEN);
+    chunk(req, k_css);
+    char buf[200];
+    snprintf(buf, sizeof(buf), "<h1>工具箱设置</h1><div class=sub>%s · 固件 %s</div>", g_settings.name, SYS_FW_VERSION);  // glyph-check: ignore
+    chunk(req, buf);
 
-    // 附近网络:按信号排序,同名只留最强的
+    // 当前状态
+    chunk(req, "<div class=card><h2>当前状态</h2>");  // glyph-check: ignore
+    status_row(req, "无线网络", g_settings.wifi_ssid[0] ? g_settings.wifi_ssid : "未设置",  // glyph-check: ignore
+               g_settings.wifi_ssid[0] ? "ok" : "warn");
+    snprintf(buf, sizeof(buf), "%s%s", g_settings.city[0] ? g_settings.city : "按网络自动定位",  // glyph-check: ignore
+             g_settings.lat[0] ? "(经纬度已填)" : "");  // glyph-check: ignore
+    status_row(req, "天气位置", buf, "s");  // glyph-check: ignore
+    status_row(req, "语音助手密钥", g_settings.api_key[0] ? "已保存" : "未设置",  // glyph-check: ignore
+               g_settings.api_key[0] ? "ok" : "warn");
+    status_row(req, "家庭助手", g_settings.ha_url[0] ? g_settings.ha_url : "未设置", "s");  // glyph-check: ignore
+    chunk(req, "</div><div id=msg></div><form id=f method=post action=/save>");
+
+    // 无线网络:附近网络(按信号排序,同名只留最强)
+    chunk(req, "<div class=card><h2>无线网络</h2>");  // glyph-check: ignore
     static net_ap_t aps[NET_SCAN_MAX];
     xSemaphoreTake(s_lock, portMAX_DELAY);
     const int n = s_ap_count;
@@ -304,7 +367,7 @@ static esp_err_t page_get(httpd_req_t *req)
         }
     }
     int shown = 0;
-    for (int i = 0; i < n; i++) {
+    for (int i = 0; i < n && shown < 12; i++) {
         if (!aps[i].ssid[0]) continue;
         bool dup = false;
         for (int j = 0; j < i; j++) dup |= !strcmp(aps[j].ssid, aps[i].ssid);
@@ -312,60 +375,65 @@ static esp_err_t page_get(httpd_req_t *req)
         char esc[100], row[300];
         html_escape(esc, sizeof(esc), aps[i].ssid);
         const int bars = aps[i].rssi >= -55 ? 4 : aps[i].rssi >= -67 ? 3 : aps[i].rssi >= -78 ? 2 : 1;
-        // 信号格:用实心/空心圆点表示
         snprintf(row, sizeof(row), "<div class=ap data-s=\"%s\"><span>%s</span><span class=s>%s%s</span></div>",
-                 esc, esc, aps[i].secure ? "" : "开放 · ",
-                 bars == 4 ? "●●●●" : bars == 3 ? "●●●○" : bars == 2 ? "●●○○" : "●○○○");
-        httpd_resp_send_chunk(req, row, HTTPD_RESP_USE_STRLEN);
+                 esc, esc, aps[i].secure ? "" : "开放 · ",  // glyph-check: ignore
+                 bars == 4 ? "●●●●" : bars == 3 ? "●●●○" : bars == 2 ? "●●○○" : "●○○○");  // glyph-check: ignore
+        chunk(req, row);
         shown++;
     }
-    if (!shown) {
-        httpd_resp_send_chunk(req, s_scan == SCAN_RUNNING ? "<p>正在扫描,稍后点 重新扫描。</p>"
-                                                          : "<p>没有扫描到网络,点 重新扫描 或手动输入。</p>",
-                              HTTPD_RESP_USE_STRLEN);
-    }
-    httpd_resp_send_chunk(req, k_page_mid, HTTPD_RESP_USE_STRLEN);
-    field(req, "接口地址", "api_base", g_settings.api_base, false);
-    field(req, "API 密钥", "api_key", g_settings.api_key, true);
-    field(req, "对话模型", "llm_model", g_settings.llm_model, false);
-    field(req, "识别模型", "asr_model", g_settings.asr_model, false);
-    field(req, "朗读模型", "tts_model", g_settings.tts_model, false);
-    field(req, "朗读声音", "tts_voice", g_settings.tts_voice, false);
-    field(req, "家里的中转服务器(可选,留空自动查找)", "server", g_settings.server, false);
-    // 天气位置与家居字段插在 tail 的 %s 位置
-    // 只在打开网页时临时分配,平时不占常驻内存。
-    const size_t tf_len = 1600, tail_len = sizeof(k_page_tail) + 1600;
-    char *tail_fields = malloc(tf_len);
-    char *tail = malloc(tail_len);
-    if (!tail_fields || !tail) {
-        free(tail_fields);
-        free(tail);
-        return httpd_resp_send_chunk(req, NULL, 0);
-    }
-    tail_fields[0] = '\0';
-    char esc[220];
-    const struct { const char *label, *name, *value; bool secret; } extra[] = {
-        {"城市名(显示用)", "city", g_settings.city, false},
-        {"纬度", "lat", g_settings.lat, false},
-        {"经度", "lon", g_settings.lon, false},
-        {"地址,例 http://192.168.1.5:8123", "ha_url", g_settings.ha_url, false},
-        {"长期访问令牌", "ha_token", g_settings.ha_token, true},
-        {"实体,例 light.living_room, switch.fan", "ha_ents", g_settings.ha_entities, false},
-    };
-    for (size_t i = 0; i < sizeof(extra) / sizeof(extra[0]); i++) {
-        html_escape(esc, sizeof(esc), extra[i].secret ? "" : extra[i].value);
-        char one[420];
-        snprintf(one, sizeof(one), "<label>%s</label><input name=%s value=\"%s\"%s>", extra[i].label,
-                 extra[i].name, esc,
-                 extra[i].secret ? (extra[i].value[0] ? " type=password placeholder='已保存,留空不变'"
-                                                       : " type=password") : "");
-        strncat(tail_fields, one, tf_len - strlen(tail_fields) - 1);
-    }
-    snprintf(tail, tail_len, k_page_tail, tail_fields);
-    httpd_resp_send_chunk(req, tail, HTTPD_RESP_USE_STRLEN);
-    free(tail_fields);
-    free(tail);
+    if (!shown) chunk(req, s_scan == SCAN_RUNNING ? "<p>正在扫描…</p>" : "<p>没有扫描到网络。</p>");  // glyph-check: ignore
+    chunk(req, "<p><a href=/rescan style='color:#ff6b57'>重新扫描</a> · 只改下面其他设置时,名称留空即可</p>"  // glyph-check: ignore
+              "<label>网络名称(点上面的列表或手动输入隐藏网络)</label><input name=ssid id=ssid autocomplete=off>"  // glyph-check: ignore
+              "<label>密码</label><div class=pw><input name=pass id=pass type=password autocomplete=off>"  // glyph-check: ignore
+              "<button type=button class=eye>显示</button></div></div>");  // glyph-check: ignore
+
+    // 天气位置
+    chunk(req, "<div class=card><h2>天气位置</h2><p>选城市最准;区县可以直接输入名字,设备联网后自动查经纬度。</p>"  // glyph-check: ignore
+              "<select id=cities data-c=\"");
+    chunk(req, k_cities);
+    chunk(req, "\"><option value=keep>保持当前设置</option><option value=auto>按网络自动定位</option>"  // glyph-check: ignore
+              "<option value=typed>手动输入城市 / 区县</option></select>");  // glyph-check: ignore
+    field(req, "城市 / 区县名", "city", g_settings.city, false, "例:浦东、海淀、余杭");  // glyph-check: ignore
+    chunk(req, "<details><summary>精确经纬度(可选)</summary>");  // glyph-check: ignore
+    field(req, "纬度", "lat", g_settings.lat, false, "例:31.23");  // glyph-check: ignore
+    field(req, "经度", "lon", g_settings.lon, false, "例:121.47");  // glyph-check: ignore
+    chunk(req, "</details></div>");
+
+    // 语音助手
+    chunk(req, "<div class=card><h2>语音助手(云端)</h2><p>没有家里的服务器时,设备直接调用云端完成 识别 → 对话 → 朗读。"  // glyph-check: ignore
+              "硅基流动在国内可直连,注册后在控制台创建密钥即可。</p>"  // glyph-check: ignore
+              "<select id=prov><option value=keep>保持当前接口</option><option value=sf>硅基流动(推荐)</option>"  // glyph-check: ignore
+              "<option value=custom>其他兼容 OpenAI 的接口</option></select>");  // glyph-check: ignore
+    field(req, "API 密钥", "api_key", g_settings.api_key, true, "sk-...");
+    chunk(req, "<details><summary>接口与模型</summary>");  // glyph-check: ignore
+    field(req, "接口地址", "api_base", g_settings.api_base, false, NULL);  // glyph-check: ignore
+    field(req, "对话模型", "llm_model", g_settings.llm_model, false, NULL);  // glyph-check: ignore
+    field(req, "识别模型", "asr_model", g_settings.asr_model, false, NULL);  // glyph-check: ignore
+    field(req, "朗读模型", "tts_model", g_settings.tts_model, false, NULL);  // glyph-check: ignore
+    field(req, "朗读声音", "tts_voice", g_settings.tts_voice, false, NULL);  // glyph-check: ignore
+    chunk(req, "</details><p>注意:密钥保存在设备里,请勿把设备借给不信任的人。</p></div>");  // glyph-check: ignore
+
+    // 家庭助手 + 服务器
+    chunk(req, "<div class=card><h2>家庭助手(可选)</h2><p>长期访问令牌在 Home Assistant 的个人资料页底部创建;实体用逗号分隔。</p>");  // glyph-check: ignore
+    field(req, "地址", "ha_url", g_settings.ha_url, false, "http://192.168.1.5:8123");  // glyph-check: ignore
+    field(req, "长期访问令牌", "ha_token", g_settings.ha_token, true, NULL);  // glyph-check: ignore
+    field(req, "实体", "ha_ents", g_settings.ha_entities, false, "light.living_room, switch.fan");  // glyph-check: ignore
+    chunk(req, "</div><div class=card><h2>家里的中转服务器(可选)</h2><p>留空会自动在局域网查找;找不到时其他功能照常直连。</p>");  // glyph-check: ignore
+    field(req, "服务器地址", "server", g_settings.server, false, "http://192.168.1.20:8787");  // glyph-check: ignore
+    chunk(req, "</div><button class=go>保存</button></form>");  // glyph-check: ignore
+    chunk(req, k_script);
     return httpd_resp_send_chunk(req, NULL, 0);
+}
+
+static esp_err_t page_status(httpd_req_t *req)
+{
+    static const char *const names[] = {"off", "no_config", "connecting", "connected", "failed"};
+    char esc[80], buf[200];
+    html_escape(esc, sizeof(esc), s_ssid);
+    snprintf(buf, sizeof(buf), "{\"net\":\"%s\",\"ssid\":\"%s\",\"ip\":\"%s\"}",
+             names[s_wifi_started ? s_state : NET_OFF], esc, s_ip);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, buf);
 }
 
 static esp_err_t page_rescan(httpd_req_t *req)
@@ -375,6 +443,52 @@ static esp_err_t page_rescan(httpd_req_t *req)
     httpd_resp_set_status(req, "303 See Other");
     httpd_resp_set_hdr(req, "Location", "/");
     return httpd_resp_send(req, NULL, 0);
+}
+
+// 其他任何地址(手机系统的联网检测、随手输入的网址)都跳到配置页:手机连上热点会自动弹出。
+static esp_err_t page_redirect(httpd_req_t *req)
+{
+    httpd_resp_set_status(req, "302 Found");
+    httpd_resp_set_hdr(req, "Location", "http://192.168.4.1/");
+    return httpd_resp_send(req, NULL, 0);
+}
+
+// 极简 DNS:热点里所有域名都解析到 192.168.4.1(强制门户)。
+static volatile bool s_dns_run;
+
+static void dns_task(void *arg)
+{
+    (void)arg;
+    const int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    struct sockaddr_in addr = {.sin_family = AF_INET, .sin_port = htons(53), .sin_addr.s_addr = htonl(INADDR_ANY)};
+    struct timeval tv = {.tv_sec = 1, .tv_usec = 0};
+    if (sock < 0 || bind(sock, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+        if (sock >= 0) close(sock);
+        vTaskDelete(NULL);
+        return;
+    }
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    uint8_t pkt[256];
+    while (s_dns_run) {
+        struct sockaddr_in from;
+        socklen_t fl = sizeof(from);
+        const int n = recvfrom(sock, pkt, sizeof(pkt) - 16, 0, (struct sockaddr *)&from, &fl);
+        if (n < 12 || (pkt[2] & 0x80)) continue;            // 太短或本身是回复
+        // 找到问题段结尾(名字 + 类型 + 类)
+        int q = 12;
+        while (q < n && pkt[q]) q += pkt[q] + 1;
+        q += 5;
+        if (q > n) continue;
+        pkt[2] = 0x81;                                     // 回复、递归可用
+        pkt[3] = 0x80;
+        pkt[6] = 0; pkt[7] = 1;                            // 1 个回答
+        pkt[8] = pkt[9] = pkt[10] = pkt[11] = 0;
+        static const uint8_t ans[16] = {0xC0, 0x0C, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 192, 168, 4, 1};
+        memcpy(pkt + q, ans, sizeof(ans));
+        sendto(sock, pkt, (size_t)q + sizeof(ans), 0, (struct sockaddr *)&from, fl);
+    }
+    close(sock);
+    vTaskDelete(NULL);
 }
 
 // application/x-www-form-urlencoded 解码
@@ -485,15 +599,20 @@ static void portal_start(void)
     }
     esp_wifi_scan_start(NULL, false);   // 给表单提供附近网络列表
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    cfg.max_uri_handlers = 4;
+    cfg.max_uri_handlers = 6;
     cfg.stack_size = 8192;
+    cfg.uri_match_fn = httpd_uri_match_wildcard;
     if (httpd_start(&s_httpd, &cfg) == ESP_OK) {
-        const httpd_uri_t get = {.uri = "/", .method = HTTP_GET, .handler = page_get};
-        const httpd_uri_t save = {.uri = "/save", .method = HTTP_POST, .handler = page_save};
-        httpd_register_uri_handler(s_httpd, &get);
-        httpd_register_uri_handler(s_httpd, &save);
-        const httpd_uri_t rescan = {.uri = "/rescan", .method = HTTP_GET, .handler = page_rescan};
-        httpd_register_uri_handler(s_httpd, &rescan);
+        const httpd_uri_t uris[] = {
+            {.uri = "/", .method = HTTP_GET, .handler = page_get},
+            {.uri = "/save", .method = HTTP_POST, .handler = page_save},
+            {.uri = "/status", .method = HTTP_GET, .handler = page_status},
+            {.uri = "/rescan", .method = HTTP_GET, .handler = page_rescan},
+            {.uri = "/*", .method = HTTP_GET, .handler = page_redirect},   // 必须最后注册
+        };
+        for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) httpd_register_uri_handler(s_httpd, &uris[i]);
+        s_dns_run = true;
+        xTaskCreate(dns_task, "dns", 3072, NULL, 4, NULL);
         s_portal = PORTAL_WAITING;
         ESP_LOGI(TAG, "配网热点 %s 已开启", s_portal_ssid);
     } else {
@@ -503,6 +622,7 @@ static void portal_start(void)
 
 static void portal_stop(void)
 {
+    s_dns_run = false;
     if (s_httpd) {
         httpd_stop(s_httpd);
         s_httpd = NULL;
