@@ -99,7 +99,11 @@ typedef struct {
 static const voice_key_t k_voice_keys[] = {
     {"Fn", 0x00},
     {"左 Control", 0x01},
+    {"右 Control", 0x10},
+    {"左 Command", 0x08},
     {"右 Command", 0x80},
+    {"左 Option", 0x04},
+    {"右 Option", 0x40},
 };
 #define VOICE_KEY_COUNT ((int)(sizeof(k_voice_keys) / sizeof(k_voice_keys[0])))
 static bool s_down_voice = true;
@@ -172,11 +176,12 @@ static void build_mode(lv_obj_t *p)
     const bool vibe = s_mode == MODE_VIBE;
     char down_main[32];
     snprintf(down_main, sizeof(down_main), "按住 = 按住 %s", k_voice_keys[s_voice_key].name);
+    // 卡片顺序与设备上的按键一致:上、下、确定
     s_keys[0] = key_card(p, 86, 44, "▲", 0, m->up,
                          vibe ? (s_down_voice ? "双击 ↓ 下一项" : "双击 切换计划模式") : m->up2);
-    s_keys[1] = key_card(p, 136, 52, "确定", 1, m->ok, m->ok2);
-    s_keys[2] = key_card(p, 194, 44, "▼", 2, vibe && s_down_voice ? down_main : m->down,
+    s_keys[2] = key_card(p, 136, 44, "▼", 2, vibe && s_down_voice ? down_main : m->down,
                          vibe ? (s_down_voice ? "语音输入 · 松开即松开" : NULL) : m->down2);
+    s_keys[1] = key_card(p, 186, 52, "确定", 1, m->ok, m->ok2);
     lv_obj_t *extra = ui_label_w(p, &ui_font_14, C_TEXT3, UI_W - 2 * UI_PAD, LV_TEXT_ALIGN_CENTER,
                                  m->extra);
     if (vibe) {
@@ -217,7 +222,7 @@ static void build_pick(lv_obj_t *p, page_t page)
     }
     ui_list_focus(&s_list, current, false);
     lv_obj_t *note = ui_label(p, &ui_font_14, C_TEXT3,
-                              voice ? "听写工具里的按住说话键设成同一个。\nFn 不生效就改选 Command"
+                              voice ? "听写工具里设成同一个键\nFn 不生效就改选 Command"
                                     : "语音键:按住 ▼ = 电脑上按住所选的键");
     lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(note, UI_W - 2 * UI_PAD);
