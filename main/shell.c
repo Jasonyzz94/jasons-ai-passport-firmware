@@ -409,6 +409,7 @@ static void switch_to(const app_t *app, int dir)
     shell_hints("");
     s_keep_awake = false;
     s_app = app;
+    sys_log_memory(app->name);   // 进入每个应用前记一笔,卡死时能看出是哪个应用、还剩多少内存
     if (app->create) app->create(s_content);
     content_enter_anim(dir);
 }

@@ -197,3 +197,11 @@ uint32_t sys_largest_block(void)
 }
 
 void sys_restart(void) { esp_restart(); }
+
+void sys_log_memory(const char *where)
+{
+    ESP_LOGI(TAG, "内存[%s] 空闲 %u,最大块 %u,历史最低 %u", where,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+}

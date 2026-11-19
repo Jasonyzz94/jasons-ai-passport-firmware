@@ -156,18 +156,18 @@ static void about_render(void)
 {
     uint8_t mac[6];
     sys_mac(mac);
-    char buf[360];
+    char buf[520];
     const int64_t up = sys_now_ms() / 1000;
     snprintf(buf, sizeof(buf),
              "设备名  %s\n固件    %s 版\n硬件码  %02X%02X%02X%02X%02X%02X\n"
              "地址    %s\n服务器  %s\n电池    %d%% · %d 毫伏\n内存    空闲 %u 千字节\n"
-             "运行    %d 小时 %d 分",
+             "运行    %d 小时 %d 分\n发现    %s",
              g_settings.name, SYS_FW_VERSION, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
              net_state() == NET_CONNECTED ? net_ip() : "未联网",
              relay_state() == SRV_OK ? (strstr(relay_url(), "://") ? strstr(relay_url(), "://") + 3
                                                                    : relay_url()) : srv_text(),
              sys_battery_soc(), sys_battery_mv(), (unsigned)(sys_free_heap() / 1024),
-             (int)(up / 3600), (int)(up / 60 % 60));
+             (int)(up / 3600), (int)(up / 60 % 60), relay_diag());
     lv_label_set_text(s_about, buf);
 }
 
@@ -178,9 +178,11 @@ static void build_about(lv_obj_t *p)
     lv_obj_align(icon, LV_ALIGN_LEFT_MID, 2, 0);
     lv_obj_t *t = ui_label(head, &ui_font_20b, C_TEXT, "随身工具箱");
     lv_obj_align(t, LV_ALIGN_LEFT_MID, 44, 0);
-    lv_obj_t *card = ui_card(p, UI_PAD, 50, UI_W - 2 * UI_PAD, 200, C_SURFACE, 16);
+    lv_obj_t *card = ui_card(p, UI_PAD, 46, UI_W - 2 * UI_PAD, 210, C_SURFACE, 16);
     s_about = ui_label(card, &ui_font_14, C_TEXT2, "");
-    lv_obj_set_style_text_line_space(s_about, 6, 0);
+    lv_label_set_long_mode(s_about, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_about, UI_W - 2 * UI_PAD - 24);
+    lv_obj_set_style_text_line_space(s_about, 3, 0);
     lv_obj_set_pos(s_about, 14, 12);
     about_render();
     shell_hints("长▲:返回");

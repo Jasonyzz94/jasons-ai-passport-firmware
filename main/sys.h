@@ -61,3 +61,6 @@ uint32_t sys_free_heap(void);
 uint32_t sys_largest_block(void);
 
 void sys_restart(void);
+
+// 在串口日志里记一笔内存状态(空闲 / 最大块 / 历史最低),用于定位卡死和内存不足。
+void sys_log_memory(const char *where);

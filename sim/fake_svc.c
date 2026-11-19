@@ -71,6 +71,7 @@ bool net_portal_take(portal_form_t *f) { (void)f; return false; }
 // ---- 中转服务器 ----
 srv_state_t relay_state(void) { return g_fake.srv; }
 bool relay_ready(void) { return g_fake.net == NET_CONNECTED; }
+const char *relay_diag(void) { return "已连接并配对"; }
 bool relay_local(void) { return g_fake.srv != SRV_OK; }
 const char *relay_url(void) { return "http://192.168.31.20:8787"; }
 void relay_discover(void) {}

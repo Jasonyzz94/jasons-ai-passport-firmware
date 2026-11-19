@@ -95,6 +95,8 @@ srv_state_t relay_state(void);
 bool relay_ready(void);
 // 没有服务器、由设备直连在处理请求。
 bool relay_local(void);
+// 最近一次服务器发现的结果说明(中文,给设置页显示)。
+const char *relay_diag(void);
 const char *relay_url(void);
 void relay_discover(void);           // 局域网广播发现 + 配对取令牌
 // 发起请求,返回句柄(>=0),失败 -1。body 为 NULL 时 GET,否则 POST JSON。

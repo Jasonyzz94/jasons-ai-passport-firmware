@@ -42,6 +42,8 @@ static TaskHandle_t s_task;
 static volatile srv_state_t s_state = SRV_UNKNOWN;
 static volatile bool s_discover;
 static char s_url[96];
+static char s_diag[96] = "还没联网";      // 最近一次发现的结果(给设置页显示)
+static volatile bool s_attempted;
 static char s_token[48];
 
 const char *relay_token(void) { return s_token; }
@@ -56,8 +58,12 @@ bool relay_local(void) { return net_state() == NET_CONNECTED && s_state != SRV_O
 
 int local_request(const char *path, const char *body, char *out, int cap);
 
+bool relay_discovery_attempted(void) { return s_attempted; }
+const char *relay_diag(void) { return s_diag; }
+
 void relay_discover(void)
 {
+    s_attempted = false;
     s_discover = true;
     if (s_task) xTaskNotifyGive(s_task);
 }
@@ -203,7 +209,9 @@ static void do_discover(void)
         snprintf(s_url, sizeof(s_url), "%s", g_settings.server);
     } else if (!broadcast_discover(s_url, sizeof(s_url))) {
         s_state = SRV_UNREACHABLE;
+        snprintf(s_diag, sizeof(s_diag), "广播无回应(VPN/防火墙/路由器隔离?)");
         ESP_LOGW(TAG, "局域网里没有找到服务器");
+        s_attempted = true;
         return;
     }
     // 去掉末尾斜杠
@@ -215,6 +223,10 @@ static void do_discover(void)
         if (pair()) st = http(s_url, "/api/hello", NULL, NULL, 0, 4000);
     }
     s_state = st == 200 ? SRV_OK : SRV_UNREACHABLE;
+    if (st == 200) snprintf(s_diag, sizeof(s_diag), "已连接");
+    else if (st < 0) snprintf(s_diag, sizeof(s_diag), "连不上 8787 端口(防火墙?)");
+    else snprintf(s_diag, sizeof(s_diag), "服务器返回 %d(配对被拒?)", st);
+    s_attempted = true;
     ESP_LOGI(TAG, "服务器 %s: %s", s_url, st == 200 ? "已连接" : "不可用");
 }
 

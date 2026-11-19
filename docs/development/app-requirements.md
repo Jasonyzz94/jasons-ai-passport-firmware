@@ -2,74 +2,89 @@
   <strong>English</strong> · <a href="app-requirements.zh_CN.md">简体中文</a>
 </p>
 
-# Application requirements: Pomodoro Timer (feature/pomodoro-timer)
+# Application requirements: pocket toolbox
 
-## Goal
+This branch turns the device into a 12-in-1 toolbox. Every screen is a custom Chinese
+UI (the baseline test menu is not reused). This document records implemented behavior
+and acceptance status; hardware limits are in the
+[hardware guide](../hardware-design/AI_HARDWARE_DEVELOPMENT_GUIDE.md).
 
-Use the device as an offline pomodoro timer: a countdown screen, three-button controls,
-an audible phase-change alert, a completed-session counter, and configurable screen-off
-levels including an always-on mode.
+## Global conventions
 
-## Controls and behavior
+- Keys (physical order, top to bottom): Up ▲, Down ▼, OK.
+- ▲▼ click: move / adjust; OK click: primary action; **long-press ▲: back**; long-press OK,
+  long-press ▼ and double clicks are app-defined. The bottom hint bar shows the
+  available actions (trailing items are dropped when they do not fit).
+- While the screen is off, the first key only wakes it; the Bluetooth remote is the
+  exception (keys are sent while the screen stays off).
+- Status bar: time, background timer chip (pomodoro / countdown), Wi-Fi and Bluetooth
+  icons, battery.
+- The power key is a dedicated hardware switch that is not wired to the MCU, so
+  firmware cannot see short presses and cannot use it to turn the screen off.
 
-- Default 25-minute focus plus 5-minute break.
-- Main screen `OK` click: start / pause / resume.
-- Main screen `OK` long-press: turn the screen off immediately; the timer keeps running
-  and any key wakes it (the first press only wakes, no action).
-- Main screen Up / Down click: fine-tune the current phase duration in READY only,
-  clamped to 1–60 minutes.
-- Main screen Up long-press: open the setup screen, including while RUNNING; duration
-  rows are read-only and dimmed while RUNNING.
-- Main screen Down long-press: switch the artwork theme manually; themes also rotate
-  automatically after each completed focus session.
-- Setup screen has five rows: Focus, Break, Display, Help, Reset.
-  - Up / Down click: move the selected row up/down, wrapping across the five rows.
-  - `OK` click: change the selected row — minutes +1 with wraparound (not RUNNING,
-    back to 1 after 60), Display cycles to the next level, Help opens the
-    controls-help page (OK returns), Reset resets the phase and returns to main.
-  - `OK` long-press: save and return to the main screen.
-- Display levels: 30s / 60s / 120s / 5min / Always on, default 60s. Always on disables
-  auto screen-off; manual screen-off still works.
-- After the configured idle time the backlight turns off while the timer keeps running;
-  the first key press only wakes the screen and performs no action, and RELEASE
-  events do not wake it (so a long-press screen-off is not undone by letting go). This is
-  backlight-off, not light/deep sleep; see
-  [pomodoro-power-roadmap.md](pomodoro-power-roadmap.md) for the power-saving plan.
-- Focus finished: increment the counter, beep three times, and start the break automatically.
-- Break finished: beep twice and return to a READY focus phase, waiting for a manual start.
-- Durations, the counter, the theme, and the Display level persist in NVS
-  (namespace `pomodoro`).
-- Battery percentage sits in the top-right corner; an unavailable fuel gauge shows
-  `--`, and unavailable audio degrades to a silent phase change.
+## Tools
 
-## Screen
+| Tool | Main features |
+| --- | --- |
+| Pomodoro | Ring progress, long break every N, skip, auto start, 30 s re-alert until acknowledged, weekly stats; runs in the background |
+| Clock & weather | Large clock, current weather and 4-day / hourly forecast, nightstand mode |
+| Voice assistant | Hold OK to talk; uses the home relay server when found, otherwise the cloud directly (ASR → chat → TTS) |
+| Bluetooth remote | Vibe coding, slides, media, camera; the device acts as a BLE keyboard |
+| Sound tools | Spectrum and decibel meter, tuner, metronome |
+| Device link | ESP-NOW peer to peer: walkie-talkie, quick messages, ping, focus together |
+| Smart home / info board | Via the relay or directly to Home Assistant; the board shows local cards without a server |
+| Wi-Fi analyzer, timer, random, settings | Channel load, stopwatch / countdown, dice / what to eat, setup and system info |
 
-A custom design (the baseline test menu and pixel demo shell are not reused).
-Regular text uses Montserrat 14/20 with wrapping disabled to avoid overlap, while
-the countdown uses a 5x7 glyph grid scaled by an integer factor, with a blinking
-colon while running. Phase artwork is two-frame character-map sprite animation:
-frames alternate every 400 ms while RUNNING, with a two-pixel bounce. Three themes
-rotate — garden (tomato / coffee), cats (sitting / sleeping), and space (rocket /
-moon) — switching automatically after each completed focus session or manually via
-a Down long-press; the theme persists in NVS. Completed sessions show up to four
-mini tomatoes plus a counter. The main screen also carries a progress bar, a status
-line, and button hints; the setup screen shows five selectable cards, with a separate
-controls-help page. All text is English.
+### Bluetooth remote · vibe coding
 
-## Structure
+| Key | Click | Long press | Double click |
+| --- | --- | --- | --- |
+| ▲ | ↑ | back to the mode list | ↓ (when ▼ is the voice key) or Shift+Tab |
+| ▼ (voice key) | pressing holds the chosen key, releasing releases it | same | same |
+| OK | Enter | Esc (interrupt) | quick commands |
 
-- `main/pomodoro.c/h`: pure state machine without ESP-IDF/LVGL dependencies.
-- `main/main.c`: UI, input dispatch, beep task, NVS persistence, and screen-off control.
-- `main/pixel_time.c/h`: large pixel countdown rendering from a 5x7 glyph grid.
-- `main/pixel_art.c/h`: character-map sprite rendering and three two-frame animated themes.
-- `tests/test_pomodoro.c`: host tests for the state machine, registered in `tools/validate.sh`.
-- `docs/development/pomodoro-power-roadmap.md` / `.zh_CN.md`: power-saving roadmap.
+- The mode list opens picker pages that save the role of ▼ (voice key / down ↓) and the
+  computer key the voice key holds (Fn, left/right Control, left/right Command,
+  left/right Option).
+- Fn uses an Apple vendor report; if that report map makes HID initialization fail,
+  firmware falls back to the base map and the UI suggests Command.
+- The ESP32-C3 only has BLE and no Classic Bluetooth headset profile, so the device
+  cannot act as the computer's Bluetooth microphone.
 
-## Acceptance
+## Network and relay server
 
-- `./tools/validate.sh --all` passes.
-- On-device confirmation: overlap-free layout, start/pause/resume, OK long-press
-  screen-off and wake, READY minute tuning, setup entry while RUNNING with read-only
-  durations, every Display level plus always-on, Help page navigation, Reset execution,
-  manual/automatic theme switching, phase-change beeps, settings and counter surviving
-  reboot, and the battery reading.
+- When Wi-Fi is configured, the device connects once at boot to sync time and turns the
+  radio off only after the time is valid **and** the first relay discovery has finished
+  (at most 60 s).
+- Discovery: the device sends UDP 8788 queries to 255.255.255.255 and the subnet
+  broadcast address, and listens for the server's announcement sent to UDP 8789 every
+  3 s; it then pairs over HTTP 8787. The result appears on the discovery line of
+  the device's About page.
+- Without a server the device works directly: weather (typed city geocoded / manual
+  lat-lon / IP lookup → Open-Meteo), info board (local cards), smart home (LAN Home
+  Assistant) and the voice assistant (an OpenAI-compatible cloud, SiliconFlow by
+  default).
+- Setup page: pops up automatically when a phone joins the device hotspot; status card,
+  nearby networks, weather location (built-in city coordinates), assistant key and
+  models, Home Assistant, relay address; it shows the connection result live. Leaving
+  the network name empty saves only the other settings.
+
+## Known limits and security
+
+- The API key and Home Assistant token are stored in NVS in plain text; they are not
+  echoed back to the web page, but storage is not encrypted.
+- Direct weather uses TLS, which is tight without PSRAM; every app switch logs free
+  heap and the largest block on the serial console.
+- The direct cloud voice upload format (chunked multipart WAV) and speech parameters
+  follow the provider documentation but have not been exercised against the real API.
+
+## Acceptance status
+
+- Build and host tests (icons, pomodoro, DSP, HID keymap, link protocol, weather
+  shaping, button spike rejection, server tests): pass.
+- Device tests: not run. Pending: sound tools no longer freeze, key responsiveness on
+  Wi-Fi pages, BLE pairing and voice-key hold, Fn recognition on macOS, setup page
+  popup, direct weather and cloud voice, two-device link.
+
+Power planning: [pomodoro power roadmap](pomodoro-power-roadmap.md). Server:
+[server/README.md](../../server/README.md).

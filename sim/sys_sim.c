@@ -112,3 +112,4 @@ const char *sys_short_id(void) { return "A3F2"; }
 uint32_t sys_free_heap(void) { return 148 * 1024; }
 uint32_t sys_largest_block(void) { return 92 * 1024; }
 void sys_restart(void) { printf("sim: restart requested\n"); }
+void sys_log_memory(const char *where) { (void)where; }

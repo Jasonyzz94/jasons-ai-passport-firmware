@@ -2,6 +2,7 @@
 //
 // 所有会阻塞或耗时的 esp_wifi_* 调用都在 net 任务里执行;LVGL 任务只发命令、读状态。
 // 开机若已配网,会先连一次 Wi-Fi 对时(最多 60 秒),对时成功且没有应用占用就关掉射频省电。
+#include "esp_internal.h"
 #include "settings.h"
 #include "svc.h"
 #include "sys.h"
@@ -683,7 +684,9 @@ static void net_task(void *arg)
                 apply();
             }
         }
-        if (s_boot_sync && (time_valid() || now >= boot_sync_until)) {
+        // 开机对时:时间对好 且 第一次服务器发现已经做完 才关 Wi-Fi
+        // (以前时间一对好就关,会把正在进行的发现打断)。最多 60 秒。
+        if (s_boot_sync && ((time_valid() && relay_discovery_attempted()) || now >= boot_sync_until)) {
             s_boot_sync = false;
             ESP_LOGI(TAG, "开机对时%s", time_valid() ? "完成" : "超时");
             apply();
