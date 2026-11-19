@@ -74,7 +74,7 @@ static const phrase_t k_phrases[] = {
 };
 #define PHRASE_COUNT ((int)(sizeof(k_phrases) / sizeof(k_phrases[0])))
 
-typedef enum { PAGE_MODES = 0, PAGE_MODE, PAGE_PHRASES } page_t;
+typedef enum { PAGE_MODES = 0, PAGE_MODE, PAGE_PHRASES, PAGE_PICK_DOWN, PAGE_PICK_VOICE } page_t;
 
 static int s_mode;
 static page_t s_kind;
@@ -98,8 +98,8 @@ typedef struct {
 } voice_key_t;
 static const voice_key_t k_voice_keys[] = {
     {"Fn", 0x00},
+    {"左 Control", 0x01},
     {"右 Command", 0x80},
-    {"右 Control", 0x10},
 };
 #define VOICE_KEY_COUNT ((int)(sizeof(k_voice_keys) / sizeof(k_voice_keys[0])))
 static bool s_down_voice = true;
@@ -202,6 +202,29 @@ static void build_phrases(lv_obj_t *p)
     shell_hints("▲▼:选择|OK:发送|长▲:返回");
 }
 
+// 选项页:选好后固定保存,以后一直用这个(▲▼ 选择,确定保存,长按 ▲ 不保存返回)。
+static void build_pick(lv_obj_t *p, page_t page)
+{
+    const bool voice = page == PAGE_PICK_VOICE;
+    lv_obj_t *t = ui_label(p, &ui_font_20b, C_TEXT, voice ? "语音键对应" : "▼ 键用途");
+    lv_obj_set_pos(t, UI_PAD + 4, 4);
+    ui_list_create(&s_list, p, UI_PAD, 36, UI_W - 2 * UI_PAD, 170, C_REMOTE);
+    const int current = voice ? s_voice_key : (s_down_voice ? 0 : 1);
+    const int count = voice ? VOICE_KEY_COUNT : 2;
+    for (int i = 0; i < count; i++) {
+        const char *name = voice ? k_voice_keys[i].name : (i == 0 ? "语音键(按住说话)" : "向下 ↓");
+        ui_list_add(&s_list, i == current ? &IC_CHECK : NULL, name, NULL, false);
+    }
+    ui_list_focus(&s_list, current, false);
+    lv_obj_t *note = ui_label(p, &ui_font_14, C_TEXT3,
+                              voice ? "听写工具里的按住说话键设成同一个。\nFn 不生效就改选 Command"
+                                    : "语音键:按住 ▼ = 电脑上按住所选的键");
+    lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(note, UI_W - 2 * UI_PAD);
+    lv_obj_set_pos(note, UI_PAD, 206);
+    shell_hints("▲▼:选择|OK:保存|长▲:返回");
+}
+
 static void build(page_t page)
 {
     voice_release();
@@ -212,6 +235,8 @@ static void build(page_t page)
     switch (page) {
     case PAGE_MODE: build_mode(s_page); break;
     case PAGE_PHRASES: build_phrases(s_page); break;
+    case PAGE_PICK_DOWN:
+    case PAGE_PICK_VOICE: build_pick(s_page, page); break;
     default: build_modes(s_page); break;
     }
 }
@@ -220,7 +245,7 @@ static void create(lv_obj_t *root)
 {
     s_root = root;
     s_down_voice = sys_kv_get_i32("r_dv", 1) != 0;
-    s_voice_key = sys_kv_get_i32("r_vk", 0);
+    s_voice_key = sys_kv_get_i32("r_vk2", 0);
     if (s_voice_key < 0 || s_voice_key >= VOICE_KEY_COUNT) s_voice_key = 0;
     s_holding = false;
     s_page = NULL;
@@ -319,13 +344,9 @@ static bool key(sys_key_t k, sys_key_ev_t ev)
     case PAGE_MODES:
         if (ev != SYS_EV_CLICK) return false;
         if (k == SYS_KEY_OK && s_list.focus == ROW_DOWN_KEY) {
-            s_down_voice = !s_down_voice;
-            sys_kv_set_i32("r_dv", s_down_voice);
-            ui_list_set_value(&s_list, ROW_DOWN_KEY, s_down_voice ? "语音键" : "向下 ↓");
+            build(PAGE_PICK_DOWN);
         } else if (k == SYS_KEY_OK && s_list.focus == ROW_VOICE_KEY) {
-            s_voice_key = (s_voice_key + 1) % VOICE_KEY_COUNT;
-            sys_kv_set_i32("r_vk", s_voice_key);
-            ui_list_set_value(&s_list, ROW_VOICE_KEY, k_voice_keys[s_voice_key].name);
+            build(PAGE_PICK_VOICE);
         } else if (k == SYS_KEY_OK) {
             s_mode = s_list.focus;
             build(PAGE_MODE);
@@ -333,6 +354,32 @@ static bool key(sys_key_t k, sys_key_ev_t ev)
             ui_list_move(&s_list, k == SYS_KEY_DOWN ? 1 : -1);
         }
         return true;
+    case PAGE_PICK_DOWN:
+    case PAGE_PICK_VOICE: {
+        const bool voice = s_kind == PAGE_PICK_VOICE;
+        const int row = voice ? ROW_VOICE_KEY : ROW_DOWN_KEY;
+        if (back) {
+            build(PAGE_MODES);
+            ui_list_focus(&s_list, row, false);
+            return true;
+        }
+        if (ev != SYS_EV_CLICK) return true;
+        if (k != SYS_KEY_OK) {
+            ui_list_move(&s_list, k == SYS_KEY_DOWN ? 1 : -1);
+            return true;
+        }
+        if (voice) {
+            s_voice_key = s_list.focus;
+            sys_kv_set_i32("r_vk2", s_voice_key);
+        } else {
+            s_down_voice = s_list.focus == 0;
+            sys_kv_set_i32("r_dv", s_down_voice);
+        }
+        shell_toast("已保存");
+        build(PAGE_MODES);
+        ui_list_focus(&s_list, row, false);
+        return true;
+    }
     case PAGE_PHRASES:
         if (back) {
             build(PAGE_MODE);

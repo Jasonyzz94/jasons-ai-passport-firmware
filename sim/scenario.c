@@ -99,6 +99,12 @@ void sim_scenario(void (*shot)(const char *), void (*key)(sys_key_t, sys_key_ev_
     // ---- 遥控 ----
     open_app(&APP_REMOTE);
     shot("70_remote_modes");
+    for (int i = 0; i < 5; i++) CLICK(DOWN);
+    CLICK(OK);
+    CLICK(DOWN);
+    shot("70b_remote_pick_voice");
+    LONG(UP);
+    CLICK(DOWN);
     CLICK(OK);
     shot("71_remote_vibe");
     key(OK, SYS_EV_DOUBLE);
