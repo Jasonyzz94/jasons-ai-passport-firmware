@@ -127,18 +127,37 @@ static bool broadcast_discover(char *url, size_t len)
     if (sock < 0) return false;
     int yes = 1;
     setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &yes, sizeof(yes));
+    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+    // 绑定固定端口:既能收到服务器对询问的回复,也能收到服务器每 3 秒的主动广播
+    // (有些 VPN / 路由器只拦一个方向)。
+    struct sockaddr_in local = {
+        .sin_family = AF_INET,
+        .sin_port = htons(RELAY_BEACON_PORT),
+        .sin_addr.s_addr = htonl(INADDR_ANY),
+    };
+    bind(sock, (struct sockaddr *)&local, sizeof(local));
     struct timeval tv = {.tv_sec = 0, .tv_usec = 500000};
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    struct sockaddr_in to = {
-        .sin_family = AF_INET,
-        .sin_port = htons(RELAY_DISCOVERY_PORT),
-        .sin_addr.s_addr = htonl(INADDR_BROADCAST),
-    };
+
+    // 两种广播地址都发:受限广播 255.255.255.255 与本网段广播(如 192.168.31.255)。
+    uint32_t targets[2] = {htonl(INADDR_BROADCAST), 0};
+    esp_netif_ip_info_t ip;
+    if (esp_netif_get_ip_info(net_sta_netif(), &ip) == ESP_OK && ip.ip.addr) {
+        targets[1] = ip.ip.addr | ~ip.netmask.addr;
+    }
     char msg[48];
     snprintf(msg, sizeof(msg), "%s %s", RELAY_DISCOVERY_MAGIC, sys_short_id());
     bool found = false;
-    for (int attempt = 0; attempt < 4 && !found; attempt++) {
-        sendto(sock, msg, strlen(msg), 0, (struct sockaddr *)&to, sizeof(to));
+    for (int attempt = 0; attempt < 8 && !found; attempt++) {
+        for (int t = 0; t < 2; t++) {
+            if (!targets[t]) continue;
+            struct sockaddr_in to = {
+                .sin_family = AF_INET,
+                .sin_port = htons(RELAY_DISCOVERY_PORT),
+                .sin_addr.s_addr = targets[t],
+            };
+            sendto(sock, msg, strlen(msg), 0, (struct sockaddr *)&to, sizeof(to));
+        }
         char buf[256];
         const int n = recv(sock, buf, sizeof(buf) - 1, 0);
         if (n <= 0) continue;
@@ -152,6 +171,11 @@ static bool broadcast_discover(char *url, size_t len)
         cJSON_Delete(j);
     }
     close(sock);
+    if (!found) {
+        ESP_LOGW(TAG, "发现失败:本机 " IPSTR ",已向 255.255.255.255 与 " IPSTR " 广播 8 次,"
+                 "也没收到服务器广播。检查 VPN/防火墙/路由器的客户端隔离,或在配网页填写服务器地址",
+                 IP2STR(&ip.ip), IP2STR((esp_ip4_addr_t *)&targets[1]));
+    }
     return found;
 }
 

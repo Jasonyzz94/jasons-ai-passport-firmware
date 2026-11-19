@@ -12,3 +12,4 @@ void relay_start(void);
 // 发现协议(与 server/passport_server/discovery.py 保持一致)
 #define RELAY_DISCOVERY_PORT 8788
 #define RELAY_DISCOVERY_MAGIC "PASSPORT_DISCOVER 1"
+#define RELAY_BEACON_PORT 8789          // 服务器每 3 秒向这个端口广播自己的地址

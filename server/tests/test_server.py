@@ -77,6 +77,12 @@ class DataShapeTest(unittest.TestCase):
         reply = discovery.reply_for(b"PASSPORT_DISCOVER 1 A3F2", "http://1.2.3.4:8787", "Mac mini")
         self.assertIn(b'"url": "http://1.2.3.4:8787"', reply)
 
+    def test_beacon(self) -> None:
+        self.assertIn(b'"beacon": 1', discovery.beacon_payload("http://x:1", "M"))
+        self.assertEqual(discovery.broadcast_targets("192.168.31.20"),
+                         ["255.255.255.255", "192.168.31.255"])
+        self.assertEqual(discovery.broadcast_targets("127.0.0.1"), ["255.255.255.255"])
+
     def test_wmo_and_aqi(self) -> None:
         self.assertEqual(weather.wmo(0, True), ("sun", "晴"))
         self.assertEqual(weather.wmo(0, False)[0], "moon")

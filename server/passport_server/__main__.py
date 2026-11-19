@@ -21,11 +21,12 @@ async def run(config_path: Path | None) -> None:
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, cfg.host, cfg.port).start()
-    transport = await discovery.serve(url, cfg.name)
+    transport, beacon = await discovery.serve(url, cfg.name)
     logging.info("passport-server ready at %s (discovery on UDP %d)", url, discovery.PORT)
     try:
         await asyncio.Event().wait()
     finally:
+        beacon.cancel()
         transport.close()
         await runner.cleanup()
 
