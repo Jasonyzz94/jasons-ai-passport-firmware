@@ -127,6 +127,12 @@ run_static_checks() {
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/test_link_proto.c main/link_proto.c main/audio_dsp.c -lm -o "${test_dir}/test_link_proto"
     "${test_dir}/test_link_proto"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_noise_gen.c main/noise_gen.c -o "${test_dir}/test_noise_gen"
+    "${test_dir}/test_noise_gen"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_ics_parse.c main/ics_parse.c -o "${test_dir}/test_ics_parse"
+    "${test_dir}/test_ics_parse"
     for demo in audio low_power ble wifi; do
         "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
             -ffunction-sections -fdata-sections -Itests/demo_stubs -Imain \

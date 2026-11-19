@@ -264,6 +264,10 @@ static void relay_task(void *arg)
                 if (s->status < 0) {
                     s_state = SRV_UNREACHABLE;   // 连接失败:这次改走直连,稍后自动重新发现
                     s->status = local_request(s->path, s->body, s->resp, RESP_MAX);
+                } else if (s->status >= 500 && strcmp(s->path, "/api/weather") == 0) {
+                    // 服务器在,但它自己取天气失败(例如 Mac 的代理拦了天气接口):设备改为直连。
+                    ESP_LOGW(TAG, "服务器天气失败 %d,改为设备直连", s->status);
+                    s->status = local_request(s->path, s->body, s->resp, RESP_MAX);
                 }
             }
             s->state = s->status > 0 ? REQ_DONE : REQ_ERROR;

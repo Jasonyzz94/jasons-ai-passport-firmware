@@ -107,6 +107,18 @@ class DataShapeTest(unittest.TestCase):
         self.assertEqual([d["day"] for d in out["daily"]], ["今天", "周五", "周六", "周日"])
         self.assertEqual(out["daily"][1]["code"], "rain")
 
+    def test_calendar_card(self) -> None:
+        ics = ("BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nDTSTART:20261120T013000Z\r\nSUMMARY:周会\r\nEND:VEVENT\r\n"
+               "BEGIN:VEVENT\r\nDTSTART;VALUE=DATE:20261121\r\nSUMMARY:生日\r\nEND:VEVENT\r\n"
+               "BEGIN:VEVENT\r\nDTSTART:20261101T090000\r\nSUMMARY:过去\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+        now = datetime(2026, 11, 19, 8, 0)
+        events = board.next_events(ics, now)
+        self.assertEqual([e[2] for e in events], ["周会", "生日"])
+        card = board.calendar_card({"title": "日程"}, ics, now)
+        self.assertIn("之后还有 1 项", card["sub"])
+        empty = board.calendar_card({"title": "日程"}, "BEGIN:VCALENDAR\r\nEND:VCALENDAR", now)
+        self.assertEqual(empty["value"], "0")
+
     def test_countdown(self) -> None:
         card = board.countdown({"title": "元旦", "date": "2027-01-01"}, today=date(2026, 12, 25))
         self.assertEqual((card["value"], card["unit"]), ("7", "天"))

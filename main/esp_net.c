@@ -277,7 +277,8 @@ static const char k_script[] =   // glyph-check: ignore
     "$('#f').onsubmit=async e=>{e.preventDefault();msg('正在保存…','#1e2531');"
     "try{await fetch('/save',{method:'POST',body:new URLSearchParams(new FormData($('#f')))})}"
     "catch(_){msg('保存失败,请重试','#7f1d1d');return}"
-    "if(!$('#ssid').value){msg('已保存。设备上可以返回了。','#065f46');return}"
+    "const sv=$('#ssid').dataset.saved||'';"
+    "if(!$('#ssid').value||($('#ssid').value==sv&&!$('#pass').value)){msg('已保存。设备上可以返回了。','#065f46');return}"
     "msg('已保存,正在连接 '+$('#ssid').value+' …(手机可能会短暂断开,请看设备屏幕)','#1e2531');"
     "for(let i=0;i<40;i++){await new Promise(r=>setTimeout(r,1500));try{const s=await(await fetch('/status')).json();"
     "if(s.net=='connected'){msg('连接成功!设备地址 '+s.ip+'。可以关掉这个页面了。','#065f46');return}"
@@ -341,8 +342,14 @@ static esp_err_t page_get(httpd_req_t *req)
 
     // 当前状态
     chunk(req, "<div class=card><h2>当前状态</h2>");  // glyph-check: ignore
-    status_row(req, "无线网络", g_settings.wifi_ssid[0] ? g_settings.wifi_ssid : "未设置",  // glyph-check: ignore
-               g_settings.wifi_ssid[0] ? "ok" : "warn");
+    if (g_settings.wifi_ssid[0]) {
+        char esc_s[100];
+        html_escape(esc_s, sizeof(esc_s), g_settings.wifi_ssid);
+        snprintf(buf, sizeof(buf), "%s%s", esc_s, g_settings.wifi_pass[0] ? "(密码已保存)" : "(开放网络)");  // glyph-check: ignore
+        status_row(req, "已保存的无线网络", buf, "ok");  // glyph-check: ignore
+    } else {
+        status_row(req, "已保存的无线网络", "还没有", "warn");  // glyph-check: ignore
+    }
     snprintf(buf, sizeof(buf), "%s%s", g_settings.city[0] ? g_settings.city : "按网络自动定位",  // glyph-check: ignore
              g_settings.lat[0] ? "(经纬度已填)" : "");  // glyph-check: ignore
     status_row(req, "天气位置", buf, "s");  // glyph-check: ignore
@@ -373,20 +380,30 @@ static esp_err_t page_get(httpd_req_t *req)
         bool dup = false;
         for (int j = 0; j < i; j++) dup |= !strcmp(aps[j].ssid, aps[i].ssid);
         if (dup) continue;
-        char esc[100], row[300];
+        char esc[100], row[420];
         html_escape(esc, sizeof(esc), aps[i].ssid);
         const int bars = aps[i].rssi >= -55 ? 4 : aps[i].rssi >= -67 ? 3 : aps[i].rssi >= -78 ? 2 : 1;
-        snprintf(row, sizeof(row), "<div class=ap data-s=\"%s\"><span>%s</span><span class=s>%s%s</span></div>",
-                 esc, esc, aps[i].secure ? "" : "开放 · ",  // glyph-check: ignore
+        const bool saved = g_settings.wifi_ssid[0] && !strcmp(aps[i].ssid, g_settings.wifi_ssid);
+        snprintf(row, sizeof(row), "<div class=\"ap%s\" data-s=\"%s\"><span>%s%s</span><span class=s>%s%s</span></div>",
+                 saved ? " on" : "", esc, esc, saved ? " <b style='color:#4ade80'>✓ 已保存</b>" : "",  // glyph-check: ignore
+                 aps[i].secure ? "" : "开放 · ",  // glyph-check: ignore
                  bars == 4 ? "●●●●" : bars == 3 ? "●●●○" : bars == 2 ? "●●○○" : "●○○○");  // glyph-check: ignore
         chunk(req, row);
         shown++;
     }
     if (!shown) chunk(req, s_scan == SCAN_RUNNING ? "<p>正在扫描…</p>" : "<p>没有扫描到网络。</p>");  // glyph-check: ignore
-    chunk(req, "<p><a href=/rescan style='color:#ff6b57'>重新扫描</a> · 只改下面其他设置时,名称留空即可</p>"  // glyph-check: ignore
-              "<label>网络名称(点上面的列表或手动输入隐藏网络)</label><input name=ssid id=ssid autocomplete=off>"  // glyph-check: ignore
-              "<label>密码</label><div class=pw><input name=pass id=pass type=password autocomplete=off>"  // glyph-check: ignore
-              "<button type=button class=eye>显示</button></div></div>");  // glyph-check: ignore
+    {
+        char esc_s[100], tail[700];
+        html_escape(esc_s, sizeof(esc_s), g_settings.wifi_ssid);
+        snprintf(tail, sizeof(tail),
+                 "<p><a href=/rescan style='color:#ff6b57'>重新扫描</a> · 不换网络时保持原样即可</p>"  // glyph-check: ignore
+                 "<label>网络名称(点上面的列表或手动输入隐藏网络)</label>"  // glyph-check: ignore
+                 "<input name=ssid id=ssid autocomplete=off value=\"%s\" data-saved=\"%s\">"
+                 "<label>密码</label><div class=pw><input name=pass id=pass type=password autocomplete=off"  // glyph-check: ignore
+                 " placeholder=\"%s\"><button type=button class=eye>显示</button></div></div>",  // glyph-check: ignore
+                 esc_s, esc_s, g_settings.wifi_pass[0] ? "已保存,留空表示不修改" : "");  // glyph-check: ignore
+        chunk(req, tail);
+    }
 
     // 天气位置
     chunk(req, "<div class=card><h2>天气位置</h2><p>选城市最准;区县可以直接输入名字,设备联网后自动查经纬度。</p>"  // glyph-check: ignore
@@ -419,6 +436,9 @@ static esp_err_t page_get(httpd_req_t *req)
     field(req, "地址", "ha_url", g_settings.ha_url, false, "http://192.168.1.5:8123");  // glyph-check: ignore
     field(req, "长期访问令牌", "ha_token", g_settings.ha_token, true, NULL);  // glyph-check: ignore
     field(req, "实体", "ha_ents", g_settings.ha_entities, false, "light.living_room, switch.fan");  // glyph-check: ignore
+    chunk(req, "</div><div class=card><h2>日历(信息看板显示日程)</h2><p>在 iCloud / Google / Outlook / "  // glyph-check: ignore
+               "飞书 / 钉钉等日历里找\"订阅链接\"或\"公开 iCal 地址\",粘贴到这里。</p>");  // glyph-check: ignore
+    field(req, "日历订阅地址(.ics 或 webcal://)", "ics", g_settings.ics_url, false, "https://...ics");  // glyph-check: ignore
     chunk(req, "</div><div class=card><h2>家里的中转服务器(可选)</h2><p>留空会自动在局域网查找;找不到时其他功能照常直连。</p>");  // glyph-check: ignore
     field(req, "服务器地址", "server", g_settings.server, false, "http://192.168.1.20:8787");  // glyph-check: ignore
     chunk(req, "</div><button class=go>保存</button></form>");  // glyph-check: ignore
@@ -557,6 +577,7 @@ static esp_err_t page_save(httpd_req_t *req)
     form_field(body, "ha_url", s_form.ha_url, sizeof(s_form.ha_url));
     form_field(body, "ha_token", s_form.ha_token, sizeof(s_form.ha_token));
     form_field(body, "ha_ents", s_form.ha_entities, sizeof(s_form.ha_entities));
+    form_field(body, "ics", s_form.ics_url, sizeof(s_form.ics_url));
     s_form.valid = true;
     xSemaphoreGive(s_lock);
     free(body);

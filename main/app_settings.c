@@ -329,7 +329,9 @@ static void tick(int64_t now)
         static portal_form_t f;
         if (net_portal_take(&f)) {
 #define SET(dst, src) snprintf(dst, sizeof(dst), "%s", src)
-            const bool wifi_changed = f.ssid[0] != '\0';
+            // 名称没变且密码留空 = 沿用已保存的网络,不重新连接。
+            const bool same_ssid = !strcmp(f.ssid, g_settings.wifi_ssid);
+            const bool wifi_changed = f.ssid[0] != '\0' && (!same_ssid || f.pass[0] != '\0');
             if (wifi_changed) {
                 SET(g_settings.wifi_ssid, f.ssid);
                 SET(g_settings.wifi_pass, f.pass);
@@ -348,6 +350,7 @@ static void tick(int64_t now)
             SET(g_settings.ha_url, f.ha_url);
             if (f.ha_token[0]) SET(g_settings.ha_token, f.ha_token);
             SET(g_settings.ha_entities, f.ha_entities);
+            SET(g_settings.ics_url, f.ics_url);
 #undef SET
             settings_save();
             if (wifi_changed) {

@@ -30,6 +30,7 @@ typedef struct {
     char ha_url[64];         // Home Assistant,例 http://192.168.1.5:8123
     char ha_token[200];
     char ha_entities[200];   // 逗号分隔的实体 ID
+    char ics_url[200];       // 日历订阅地址(.ics / webcal://),看板显示接下来的日程
 } settings_t;
 
 extern settings_t g_settings;

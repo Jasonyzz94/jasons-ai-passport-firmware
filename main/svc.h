@@ -73,6 +73,7 @@ typedef struct {
     char api_base[80], api_key[96], llm_model[48], asr_model[48], tts_model[48], tts_voice[64];
     char city[24], lat[12], lon[12];
     char ha_url[64], ha_token[200], ha_entities[200];
+    char ics_url[200];
 } portal_form_t;
 // 提交后返回 true 并拷出内容(只返回一次)。
 bool net_portal_take(portal_form_t *out);
@@ -136,6 +137,10 @@ bool audio_analyze_start(void);
 void audio_analyze_pitch(bool on);   // 只有调音器需要:音高检测较费 CPU
 void audio_analyze_stop(void);
 bool audio_analysis_get(audio_analysis_t *out);
+
+// 环境声(白噪音等,见 noise_gen.h 的类型):后台持续播放,0 = 关闭。
+void audio_noise(int type);
+int audio_noise_current(void);
 
 void audio_metronome_set(int bpm, int beats_per_bar);
 void audio_metronome_run(bool on);

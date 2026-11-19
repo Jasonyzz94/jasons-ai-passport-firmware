@@ -162,6 +162,9 @@ bool audio_analysis_get(audio_analysis_t *out)
     return true;
 }
 static int s_bpm = 96;
+static int s_noise_fake;
+void audio_noise(int t) { s_noise_fake = t; }
+int audio_noise_current(void) { return s_noise_fake; }
 void audio_metronome_set(int bpm, int beats) { s_bpm = bpm; (void)beats; }
 void audio_metronome_run(bool on) { (void)on; }
 uint32_t audio_metronome_ticks(void) { return (uint32_t)(g_sim_now_ms * s_bpm / 60000); }

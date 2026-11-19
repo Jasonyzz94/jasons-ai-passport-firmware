@@ -9,6 +9,7 @@
 #include "settings.h"
 #include "svc.h"
 #include "sys.h"
+#include "ics_parse.h"
 #include "weather_shape.h"
 
 #include "cJSON.h"
@@ -189,9 +190,125 @@ static int weather(char *out, int cap)
 // ---------------------------------------------------------------------------
 // 看板(本机卡片)
 // ---------------------------------------------------------------------------
+// 汇率(open.er-api.com,免密钥):1 美元 / 1 欧元 兑人民币,缓存 10 分钟。
+static char s_fx_card[200];
+static int64_t s_fx_at = -600000;
+
+static void fetch_fx(void)
+{
+    if (sys_now_ms() - s_fx_at < 600000) return;
+    s_fx_at = sys_now_ms();
+    char *buf = malloc(FETCH_MAX);
+    if (!buf) return;
+    if (local_http("https://open.er-api.com/v6/latest/USD", NULL, NULL, buf, FETCH_MAX, 8000) == 200) {
+        cJSON *j = cJSON_Parse(buf);
+        const cJSON *rates = cJSON_GetObjectItemCaseSensitive(j, "rates");
+        const cJSON *cny = cJSON_GetObjectItemCaseSensitive(rates, "CNY");
+        const cJSON *eur = cJSON_GetObjectItemCaseSensitive(rates, "EUR");
+        if (cJSON_IsNumber(cny) && cJSON_IsNumber(eur) && eur->valuedouble > 0) {
+            snprintf(s_fx_card, sizeof(s_fx_card),
+                     "{\"title\":\"美元汇率\",\"value\":\"%.2f\",\"unit\":\"人民币\","
+                     "\"sub\":\"1 欧元 = %.2f 人民币\",\"color\":\"4ADE80\",\"icon\":\"coin\"},",
+                     cny->valuedouble, cny->valuedouble / eur->valuedouble);
+        }
+        cJSON_Delete(j);
+    }
+    free(buf);
+}
+
+// 日历:流式读取订阅文件(不整个放进内存),找接下来 7 天最近的 3 个日程。缓存 10 分钟。
+static char s_cal_card[320];
+static int64_t s_cal_at = -600000;
+
+static int tz_offset_minutes(void)
+{
+    const time_t t = time(NULL);
+    struct tm lt, gt;
+    localtime_r(&t, &lt);
+    gmtime_r(&t, &gt);
+    return (int)(ics_minutes(lt.tm_year + 1900, lt.tm_mon + 1, lt.tm_mday, lt.tm_hour, lt.tm_min)
+               - ics_minutes(gt.tm_year + 1900, gt.tm_mon + 1, gt.tm_mday, gt.tm_hour, gt.tm_min));
+}
+
+static void fetch_calendar(void)
+{
+    if (!g_settings.ics_url[0] || sys_now_ms() - s_cal_at < 600000) return;
+    struct tm tm;
+    if (!time_local(&tm)) return;
+    s_cal_at = sys_now_ms();
+    char url[210];
+    if (!strncmp(g_settings.ics_url, "webcal://", 9)) snprintf(url, sizeof(url), "https://%s", g_settings.ics_url + 9);
+    else snprintf(url, sizeof(url), "%s", g_settings.ics_url);
+
+    static ics_state_t st;
+    const int64_t now = ics_minutes(tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min);
+    ics_init(&st, now, tz_offset_minutes(), 7);
+    esp_http_client_config_t cfg = {
+        .url = url, .timeout_ms = 10000, .buffer_size = 1536, .buffer_size_tx = 1024,
+        .crt_bundle_attach = strncmp(url, "https", 5) == 0 ? esp_crt_bundle_attach : NULL,
+    };
+    esp_http_client_handle_t c = esp_http_client_init(&cfg);
+    if (!c) return;
+    bool ok = false;
+    if (esp_http_client_open(c, 0) == ESP_OK && esp_http_client_fetch_headers(c) >= 0
+        && esp_http_client_get_status_code(c) == 200) {
+        char chunk[512], line[256];
+        int ll = 0, r;
+        while ((r = esp_http_client_read(c, chunk, sizeof(chunk))) > 0) {
+            for (int i = 0; i < r; i++) {
+                const char ch = chunk[i];
+                if (ch == '\n') {
+                    if (ll && line[ll - 1] == '\r') ll--;
+                    line[ll] = '\0';
+                    ics_line(&st, line);
+                    ll = 0;
+                } else if (ll < (int)sizeof(line) - 1) {
+                    line[ll++] = ch;
+                }
+            }
+        }
+        ok = true;
+    }
+    esp_http_client_close(c);
+    esp_http_client_cleanup(c);
+    if (!ok) {
+        snprintf(s_cal_card, sizeof(s_cal_card),
+                 "{\"title\":\"日程\",\"value\":\"--\",\"unit\":\"\",\"sub\":\"日历读取失败,检查订阅地址\","
+                 "\"color\":\"FBBF24\",\"icon\":\"check\"},");
+        return;
+    }
+    if (!st.count) {
+        snprintf(s_cal_card, sizeof(s_cal_card),
+                 "{\"title\":\"日程\",\"value\":\"0\",\"unit\":\"项\",\"sub\":\"接下来 7 天没有安排\","
+                 "\"color\":\"FBBF24\",\"icon\":\"check\"},");
+        return;
+    }
+    const ics_event_t *e = &st.events[0];
+    const int64_t day_diff = e->start / 1440 - now / 1440;
+    char when[24], unit[16], sub[120];
+    if (e->all_day) snprintf(when, sizeof(when), "全天");
+    else snprintf(when, sizeof(when), "%02d:%02d", (int)(e->start % 1440 / 60), (int)(e->start % 60));
+    snprintf(unit, sizeof(unit), "%s", day_diff == 0 ? "今天" : day_diff == 1 ? "明天" : "之后");
+    if (st.count > 1) snprintf(sub, sizeof(sub), "%s · 之后还有 %d 项", e->summary, st.count - 1);
+    else snprintf(sub, sizeof(sub), "%s", e->summary);
+    // 标题来自日历,可能含引号:做最基本的转义
+    char esc[160];
+    size_t o = 0;
+    for (const char *p = sub; *p && o + 2 < sizeof(esc); p++) {
+        if (*p == '"' || *p == '\\') esc[o++] = '\\';
+        esc[o++] = *p;
+    }
+    esc[o] = '\0';
+    snprintf(s_cal_card, sizeof(s_cal_card),
+             "{\"title\":\"下一个日程\",\"value\":\"%s\",\"unit\":\"%s\",\"sub\":\"%s\","
+             "\"color\":\"FBBF24\",\"icon\":\"check\"},", when, unit, esc);
+}
+
 static int board(char *out, int cap)
 {
     static const char *const wd[7] = {"星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"};
+    fetch_fx();
+    fetch_calendar();
     struct tm tm;
     const bool dated = time_local(&tm);
     char today[160] = "", newyear[160] = "";
@@ -200,22 +317,19 @@ static int board(char *out, int cap)
                  "{\"title\":\"今天\",\"value\":\"%d\",\"unit\":\"日\",\"sub\":\"%d月 · %s · 今年第 %d 天\","
                  "\"color\":\"60A5FA\",\"icon\":\"check\"},",
                  tm.tm_mday, tm.tm_mon + 1, wd[tm.tm_wday], tm.tm_yday + 1);
-        const int year_days = ((tm.tm_year + 1900) % 4 == 0 && ((tm.tm_year + 1900) % 100 || (tm.tm_year + 1900) % 400 == 0)) ? 366 : 365;
+        const int year = tm.tm_year + 1900;
+        const int year_days = (year % 4 == 0 && (year % 100 || year % 400 == 0)) ? 366 : 365;
         snprintf(newyear, sizeof(newyear),
                  "{\"title\":\"距离元旦\",\"value\":\"%d\",\"unit\":\"天\",\"sub\":\"%d 年已过去 %d%%\","
                  "\"color\":\"FBBF24\",\"icon\":\"star\"},",
-                 year_days - tm.tm_yday, tm.tm_year + 1900, tm.tm_yday * 100 / year_days);
+                 year_days - tm.tm_yday, year, tm.tm_yday * 100 / year_days);
     }
-    const int64_t up = sys_now_ms() / 60000;
     snprintf(out, (size_t)cap,
-             "{\"updated\":\"%02d:%02d\",\"cards\":[%s%s"
+             "{\"updated\":\"%02d:%02d\",\"cards\":[%s%s%s%s"
              "{\"title\":\"今日专注\",\"value\":\"%d\",\"unit\":\"个番茄\",\"sub\":\"打开番茄钟开始下一个\","
-             "\"color\":\"FF6B57\",\"icon\":\"heart\"},"
-             "{\"title\":\"本机\",\"value\":\"%d\",\"unit\":\"%s\",\"sub\":\"空闲内存 %u KB · 未连接家里的服务器\","
-             "\"color\":\"A78BFA\",\"icon\":\"home\"}]}",
-             dated ? tm.tm_hour : 0, dated ? tm.tm_min : 0, today, newyear, pomo_today_done(),
-             (int)(up >= 60 ? up / 60 : up), up >= 60 ? "小时运行" : "分钟运行",
-             (unsigned)(sys_free_heap() / 1024));
+             "\"color\":\"FF6B57\",\"icon\":\"heart\"}]}",
+             dated ? tm.tm_hour : 0, dated ? tm.tm_min : 0, today, s_cal_card, s_fx_card, newyear,
+             pomo_today_done());
     return 200;
 }
 

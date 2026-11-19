@@ -70,6 +70,7 @@ void settings_load(void)
     sys_kv_get_str("ha_url", g_settings.ha_url, sizeof(g_settings.ha_url));
     sys_kv_get_str("ha_token", g_settings.ha_token, sizeof(g_settings.ha_token));
     sys_kv_get_str("ha_ents", g_settings.ha_entities, sizeof(g_settings.ha_entities));
+    sys_kv_get_str("ics", g_settings.ics_url, sizeof(g_settings.ics_url));
 }
 
 void settings_save(void)
@@ -96,6 +97,7 @@ void settings_save(void)
     sys_kv_set_str("ha_url", g_settings.ha_url);
     sys_kv_set_str("ha_token", g_settings.ha_token);
     sys_kv_set_str("ha_ents", g_settings.ha_entities);
+    sys_kv_set_str("ics", g_settings.ics_url);
 }
 
 void settings_factory_reset(void)

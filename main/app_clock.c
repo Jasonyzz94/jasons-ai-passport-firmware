@@ -90,8 +90,9 @@ static void render_weather(void)
     lv_obj_t *range = ui_label_w(s_card, &ui_font_14, C_TEXT2, 92, LV_TEXT_ALIGN_RIGHT, buf);
     lv_obj_align(range, LV_ALIGN_TOP_RIGHT, -12, 32);
 
-    snprintf(buf, sizeof(buf), "%s · 湿度 %d%% · 空气%s", jstr(root, "city", ""),
-             jint(now, "humidity", 0), jstr(now, "aqi_text", "--"));
+    // 显示数据的更新时间,一眼看出天气是不是最新的
+    snprintf(buf, sizeof(buf), "%s · 湿度 %d%% · %s 更新", jstr(root, "city", ""),
+             jint(now, "humidity", 0), jstr(root, "updated", "--"));
     lv_obj_t *meta = ui_label_w(s_card, &ui_font_14, C_TEXT3, 192, LV_TEXT_ALIGN_LEFT, buf);
     lv_obj_set_pos(meta, 12, 62);
 
@@ -229,9 +230,15 @@ static bool key(sys_key_t k, sys_key_ev_t ev)
         return true;
     }
     if (k == SYS_KEY_OK && ev == SYS_EV_CLICK) {
-        if (!relay_ready()) relay_discover();
-        request();
-        shell_toast("正在刷新天气");
+        s_cache_ms = sys_now_ms() - REFRESH_MS;   // 标记为过期:联网后会自动刷新
+        if (!relay_ready()) {
+            shell_toast("正在联网,连上后自动刷新");
+        } else if (s_req >= 0) {
+            shell_toast("正在获取,请稍候");
+        } else {
+            request();
+            shell_toast("正在刷新天气");
+        }
         return true;
     }
     if (k == SYS_KEY_OK && ev == SYS_EV_LONG) {

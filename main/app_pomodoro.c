@@ -7,6 +7,7 @@
 #include "apps.h"
 #include "icons.h"
 #include "pixel_art.h"
+#include "noise_gen.h"
 #include "pomodoro.h"
 #include "settings.h"
 #include "svc.h"
@@ -80,8 +81,29 @@ static void raise_alert(pomo_event_t ev)
     s_alert_next_ms = sys_now_ms() + 30000;
 }
 
+// ---- 白噪音(后台持续播放)----
+static int s_noise_type;          // 选中的声音,NOISE_OFF = 关
+static bool s_noise_auto;         // 只在专注计时进行中播放
+static int s_noise_timer;         // 定时关闭档位
+static int64_t s_noise_until;     // 0 = 不限
+static const int k_noise_minutes[] = {0, 30, 60, 120};
+#define NOISE_TIMER_COUNT 4
+
+static void noise_apply(int64_t now)
+{
+    if (s_noise_until && now >= s_noise_until) {   // 定时到:关掉
+        s_noise_type = NOISE_OFF;
+        s_noise_until = 0;
+        sys_kv_set_i32("n_type", s_noise_type);
+    }
+    const bool focus = s_pomo.state == POMO_STATE_RUNNING && s_pomo.phase == POMO_PHASE_WORK;
+    const int want = s_noise_type == NOISE_OFF ? NOISE_OFF : (s_noise_auto && !focus ? NOISE_OFF : s_noise_type);
+    if (audio_noise_current() != want) audio_noise(want);
+}
+
 static void svc_tick(int64_t now)
 {
+    noise_apply(now);
     // 跨天:累计完成数清零。
     const int32_t day = today_number();
     if (day >= 0 && day != s_today) {
@@ -128,6 +150,9 @@ void pomo_service_init(void)
     s_theme = sys_kv_get_i32("p_theme", 0);
     if (s_theme < 0 || s_theme >= PIXEL_THEME_COUNT) s_theme = 0;
     if (!sys_kv_get_blob("p_stats", &s_stats, sizeof(s_stats))) memset(&s_stats, 0, sizeof(s_stats));
+    s_noise_auto = sys_kv_get_i32("n_auto", 0) != 0;
+    s_noise_timer = 0;
+    s_noise_type = NOISE_OFF;   // 开机不自动响:上次的声音类型只作为默认选中项
     shell_add_bg_tick(svc_tick);
     shell_set_chip(svc_chip);
 }
@@ -154,7 +179,7 @@ bool pomo_running_focus(int *minutes)
 // ===========================================================================
 // 界面
 // ===========================================================================
-typedef enum { PAGE_MAIN = 0, PAGE_MENU, PAGE_SETTINGS, PAGE_STATS } page_t;
+typedef enum { PAGE_MAIN = 0, PAGE_MENU, PAGE_SETTINGS, PAGE_STATS, PAGE_NOISE } page_t;
 
 static lv_obj_t *s_root;
 static lv_obj_t *s_page;
@@ -289,7 +314,7 @@ static void build_main(lv_obj_t *p)
 // ---------------------------------------------------------------------------
 // 快捷菜单
 // ---------------------------------------------------------------------------
-enum { MENU_SKIP = 0, MENU_RESTART, MENU_THEME, MENU_STATS, MENU_SETTINGS, MENU_SCREEN };
+enum { MENU_SKIP = 0, MENU_RESTART, MENU_NOISE, MENU_THEME, MENU_STATS, MENU_SETTINGS, MENU_SCREEN };
 
 static void build_menu(lv_obj_t *p)
 {
@@ -300,6 +325,7 @@ static void build_menu(lv_obj_t *p)
     snprintf(skip, sizeof(skip), "跳过%s", pomo_phase_name(s_pomo.phase));
     ui_list_add(&s_list, &IC_STAR, skip, NULL, false);
     ui_list_add(&s_list, &IC_CHECK, "重新开始本轮", NULL, false);
+    ui_list_add(&s_list, &IC_WAVE, "白噪音", s_noise_type == NOISE_OFF ? "关" : noise_name((noise_type_t)s_noise_type), true);
     ui_list_add(&s_list, PIXEL_THEMES[s_theme].focus[0], "主题", k_theme_names[s_theme], false);
     ui_list_add(&s_list, &ICON_BOARD, "本周统计", NULL, true);
     ui_list_add(&s_list, &ICON_GEAR, "时长与规则", NULL, true);
@@ -330,6 +356,7 @@ static void menu_ok(void)
         ui_list_set_icon(&s_list, MENU_THEME, PIXEL_THEMES[s_theme].focus[0]);
         break;
     case MENU_STATS: build_page(PAGE_STATS); break;
+    case MENU_NOISE: build_page(PAGE_NOISE); break;
     case MENU_SETTINGS: build_page(PAGE_SETTINGS); break;
     default:
         build_page(PAGE_MAIN);
@@ -464,6 +491,59 @@ static void build_stats(lv_obj_t *p)
 }
 
 // ---------------------------------------------------------------------------
+// 白噪音:选一种立即开始播放(离开番茄钟也继续),可设为只在专注时播放、定时关闭。
+// ---------------------------------------------------------------------------
+#define NOISE_ROW_AUTO (NOISE_COUNT)
+#define NOISE_ROW_TIMER (NOISE_COUNT + 1)
+
+static void noise_values(void)
+{
+    for (int i = 0; i < NOISE_COUNT; i++) ui_list_set_icon(&s_list, i, i == s_noise_type ? &IC_CHECK : &IC_WAVE);
+    ui_list_set_value(&s_list, NOISE_ROW_AUTO, s_noise_auto ? "开" : "关");
+    char buf[16];
+    if (k_noise_minutes[s_noise_timer]) snprintf(buf, sizeof(buf), "%d 分钟", k_noise_minutes[s_noise_timer]);
+    else snprintf(buf, sizeof(buf), "不限");
+    ui_list_set_value(&s_list, NOISE_ROW_TIMER, buf);
+}
+
+static void build_noise(lv_obj_t *p)
+{
+    lv_obj_t *t = ui_label(p, &ui_font_20b, C_TEXT, "白噪音");
+    lv_obj_set_pos(t, UI_PAD + 4, 4);
+    ui_list_create(&s_list, p, UI_PAD, 36, UI_W - 2 * UI_PAD, UI_CONTENT_H - 40, C_TOMATO);
+    for (int i = 0; i < NOISE_COUNT; i++) ui_list_add(&s_list, &IC_WAVE, noise_name((noise_type_t)i), NULL, false);
+    ui_list_add(&s_list, NULL, "只在专注时播放", "", false);
+    ui_list_add(&s_list, NULL, "定时关闭", "", false);
+    noise_values();
+    ui_list_focus(&s_list, s_noise_type, false);
+    shell_hints("▲▼:选择|OK:播放/切换|长▲:返回");
+}
+
+static void noise_ok(void)
+{
+    const int row = s_list.focus;
+    if (row < NOISE_COUNT) {
+        s_noise_type = row;
+        if (row != NOISE_OFF) sys_kv_set_i32("n_type", row);
+        // 选好就开始;若设置为只在专注时播放,但还没在专注,提示一下
+        if (row != NOISE_OFF && s_noise_auto
+            && !(s_pomo.state == POMO_STATE_RUNNING && s_pomo.phase == POMO_PHASE_WORK)) {
+            shell_toast("开始专注后播放");
+        }
+        if (k_noise_minutes[s_noise_timer]) s_noise_until = sys_now_ms() + (int64_t)k_noise_minutes[s_noise_timer] * 60000;
+    } else if (row == NOISE_ROW_AUTO) {
+        s_noise_auto = !s_noise_auto;
+        sys_kv_set_i32("n_auto", s_noise_auto);
+    } else {
+        s_noise_timer = (s_noise_timer + 1) % NOISE_TIMER_COUNT;
+        s_noise_until = k_noise_minutes[s_noise_timer] && s_noise_type != NOISE_OFF
+                      ? sys_now_ms() + (int64_t)k_noise_minutes[s_noise_timer] * 60000 : 0;
+    }
+    noise_apply(sys_now_ms());
+    noise_values();
+}
+
+// ---------------------------------------------------------------------------
 static void build_page(page_t page)
 {
     if (s_page) lv_obj_delete(s_page);
@@ -474,6 +554,7 @@ static void build_page(page_t page)
     case PAGE_MAIN: build_main(s_page); break;
     case PAGE_MENU: build_menu(s_page); break;
     case PAGE_SETTINGS: build_settings(s_page); break;
+    case PAGE_NOISE: build_noise(s_page); break;
     default: build_stats(s_page); break;
     }
     lv_obj_set_style_opa(s_page, LV_OPA_TRANSP, 0);
@@ -541,6 +622,17 @@ static bool key(sys_key_t k, sys_key_ev_t ev)
         }
         if (click && k != SYS_KEY_OK) ui_list_move(&s_list, k == SYS_KEY_DOWN ? 1 : -1);
         else if (click) menu_ok();
+        return true;
+
+    case PAGE_NOISE:
+        if (k == SYS_KEY_UP && !click) {
+            build_page(PAGE_MENU);
+            ui_list_focus(&s_list, MENU_NOISE, false);
+            return true;
+        }
+        if (!click) return true;
+        if (k == SYS_KEY_OK) noise_ok();
+        else ui_list_move(&s_list, k == SYS_KEY_DOWN ? 1 : -1);
         return true;
 
     case PAGE_SETTINGS:

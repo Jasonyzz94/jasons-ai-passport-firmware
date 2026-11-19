@@ -61,3 +61,11 @@ voice = "Tingting"         # 系统设置 > 辅助功能 > 朗读内容 里可�
 # [[board.cards]]
 # type = "system"
 # title = "这台电脑"
+
+# 日历:iCloud / Google / Outlook 的公开订阅地址(.ics 或 webcal://)
+# [[board.cards]]
+# type = "calendar"
+# title = "下一个日程"
+# url = "https://example.com/calendar.ics"
+# color = "FBBF24"
+# icon = "check"

@@ -6,6 +6,7 @@
 //   · 播放:接收 ADPCM 块(AI 回答、对讲)解码播放
 // I2S TX 配置了 auto_clear,只读麦克风不写时扬声器输出静音。
 #include "audio_dsp.h"
+#include "noise_gen.h"
 #include "settings.h"
 #include "svc.h"
 #include "sys.h"
@@ -57,6 +58,9 @@ static volatile int s_bpm = 96;
 static volatile int s_beats = 4;
 static volatile uint32_t s_metro_ticks;
 static volatile bool s_playing;
+static volatile int s_noise = NOISE_OFF;     // 想要的环境声
+static int s_noise_playing = NOISE_OFF;      // 正在播放(渐出完成前保持旧类型)
+static noise_state_t s_noise_st;
 
 bool audio_available(void) { return s_ok; }
 
@@ -166,7 +170,8 @@ static void audio_task(void *arg)
 
     for (;;) {
         acmd_t c;
-        const bool busy = s_analyze || s_capture || s_metro_on || uxQueueMessagesWaiting(s_play);
+        const bool busy = s_analyze || s_capture || s_metro_on || uxQueueMessagesWaiting(s_play)
+                       || s_noise != NOISE_OFF || s_noise_playing != NOISE_OFF;
         if (xQueueReceive(s_cmd, &c, busy ? 0 : pdMS_TO_TICKS(50)) == pdTRUE) {
             if (c.type == CMD_VOLUME) bsp_audio_set_volume((uint8_t)c.arg);
             else if (!s_capture) play_beep((beep_t)c.arg);   // 录音时不出提示音,免得录进去
@@ -182,6 +187,20 @@ static void audio_task(void *arg)
             continue;
         }
         s_playing = false;
+
+        // 环境声:没有录音时持续合成;切换或关闭时先渐出再换,避免爆音
+        if (!s_capture && (s_noise != NOISE_OFF || s_noise_playing != NOISE_OFF)) {
+            static int16_t nbuf[CHUNK];
+            if (s_noise_playing == NOISE_OFF) {
+                s_noise_playing = s_noise;
+                s_noise_st.gain_q8 = 0;
+            }
+            const bool switching = s_noise != s_noise_playing;
+            noise_fill(&s_noise_st, (noise_type_t)s_noise_playing, nbuf, CHUNK, switching ? 0 : 150);
+            bsp_audio_write(nbuf, sizeof(nbuf));
+            if (switching && s_noise_st.gain_q8 == 0) s_noise_playing = s_noise;   // 渐出完成
+            if (!s_analyze && !s_metro_on) continue;
+        }
 
         // 节拍器
         if (s_metro_on) {
@@ -294,6 +313,16 @@ bool audio_analysis_get(audio_analysis_t *out)
     xSemaphoreGive(s_lock);
     return true;
 }
+
+void audio_noise(int type)
+{
+    if (!s_ok) return;
+    if (type < NOISE_OFF || type >= NOISE_COUNT) type = NOISE_OFF;
+    if (s_noise_st.rng == 0) noise_init(&s_noise_st, (uint32_t)sys_now_ms() | 1u);
+    s_noise = type;
+}
+
+int audio_noise_current(void) { return s_noise; }
 
 void audio_metronome_set(int bpm, int beats_per_bar)
 {
