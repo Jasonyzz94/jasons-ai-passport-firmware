@@ -179,6 +179,8 @@ const char *ble_hid_peer(void) { return "Jason 的 MacBook"; }
 void ble_hid_key(uint8_t k, uint8_t m) { (void)k; (void)m; }
 void ble_hid_consumer(uint16_t u) { (void)u; }
 void ble_hid_type(const char *t) { (void)t; }
+void ble_hid_hold(uint8_t m, bool d) { (void)m; (void)d; }
+bool ble_hid_has_fn(void) { return true; }
 void ble_hid_forget(void) {}
 
 // ---- 互联 ----
