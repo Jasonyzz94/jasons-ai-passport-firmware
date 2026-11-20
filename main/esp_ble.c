@@ -29,6 +29,7 @@ static const char *TAG = "ble";
 void ble_store_config_init(void);
 void net_yield_radio(void);
 bool net_radio_on(void);
+void lv_mem_reserve_suspend(bool on);
 
 #define RPT_KEYBOARD 1
 #define RPT_CONSUMER 2
@@ -81,8 +82,9 @@ static volatile ble_state_t s_state = BLE_OFF;
 static volatile bool s_running;
 static volatile bool s_stop_pending;   // 已请求关闭、hid 任务还没处理完
 
-// 蓝牙协议栈是否还占着射频 / 内存(运行中或正在关闭)。Wi-Fi 启动前会等它释放。
-bool ble_radio_busy(void) { return s_running || s_stop_pending || s_state == BLE_STARTING; }
+// 蓝牙是否正在启动或关闭(过渡中)。Wi-Fi 启动前会等它结束,避免两边同时抢内存。
+// 蓝牙正常运行时不算:Wi-Fi 与蓝牙可以同时工作。
+bool ble_radio_busy(void) { return s_stop_pending || s_state == BLE_STARTING; }
 static struct ble_hs_adv_fields s_fields;
 static char s_name[24];
 
@@ -261,9 +263,11 @@ static bool do_start(void)
     for (int i = 0; i < 20 && net_radio_on(); i++) vTaskDelay(pdMS_TO_TICKS(100));
     ESP_LOGI(TAG, "蓝牙启动前:空闲 %u,最大块 %u,Wi-Fi %s", (unsigned)sys_free_heap(),
              (unsigned)sys_largest_block(), net_radio_on() ? "开" : "关");
+    lv_mem_reserve_suspend(true);   // 把界面的应急储备让给蓝牙初始化
     const esp_err_t perr = nimble_port_init();
     if (perr != ESP_OK) {
-        ESP_LOGE(TAG, "nimble_port_init 失败: %s", esp_err_to_name(perr));
+        ESP_LOGE(TAG, "nimble_port_init 失败: %s(空闲 %u)", esp_err_to_name(perr), (unsigned)sys_free_heap());
+        lv_mem_reserve_suspend(false);
         s_state = BLE_FAILED;
         return false;
     }
@@ -320,6 +324,7 @@ static bool do_start(void)
                  (unsigned)sys_free_heap());
         s_dev = NULL;
         nimble_port_deinit();
+        lv_mem_reserve_suspend(false);
         s_state = BLE_FAILED;
         return false;
     }
@@ -344,6 +349,7 @@ static void do_stop(void)
     if (rc == 0) nimble_port_deinit();
     else ESP_LOGE(TAG, "蓝牙停止失败 %d,内存未释放", rc);
     s_state = BLE_OFF;
+    lv_mem_reserve_suspend(false);
     ESP_LOGI(TAG, "蓝牙已关闭:空闲 %u", (unsigned)sys_free_heap());
 }
 

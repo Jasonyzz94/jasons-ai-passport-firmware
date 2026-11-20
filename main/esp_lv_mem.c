@@ -8,6 +8,8 @@
 #include "src/stdlib/lv_mem.h"
 
 #include "esp_heap_caps.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "esp_log.h"
 #include <stdbool.h>
 #include <stdlib.h>
@@ -16,24 +18,55 @@
 #define REFILL_FREE_BYTES (64 * 1024)   // 空闲超过这么多时补回储备
 
 static const char *TAG = "lvmem";
-static void *s_reserve;
+static void *volatile s_reserve;
 static volatile bool s_used_reserve;
+// 蓝牙启动 / 运行期间让出储备并且不补回:蓝牙初始化需要大块内存,
+// 以前储备会在它初始化到一半时被补回去,导致蓝牙出错甚至重启。
+static volatile bool s_suspended;
+static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
+
+static void *take_reserve(void)
+{
+    taskENTER_CRITICAL(&s_mux);
+    void *p = s_reserve;
+    s_reserve = NULL;
+    taskEXIT_CRITICAL(&s_mux);
+    return p;
+}
 
 static void refill(void)
 {
-    if (s_reserve || heap_caps_get_free_size(MALLOC_CAP_8BIT) < REFILL_FREE_BYTES) return;
-    s_reserve = malloc(RESERVE_BYTES);
-    if (s_reserve && s_used_reserve) {
+    if (s_suspended || s_reserve || heap_caps_get_free_size(MALLOC_CAP_8BIT) < REFILL_FREE_BYTES) return;
+    void *p = malloc(RESERVE_BYTES);
+    if (!p) return;
+    taskENTER_CRITICAL(&s_mux);
+    const bool keep = !s_suspended && !s_reserve;
+    if (keep) s_reserve = p;
+    taskEXIT_CRITICAL(&s_mux);
+    if (!keep) {
+        free(p);
+        return;
+    }
+    if (s_used_reserve) {
         s_used_reserve = false;
         ESP_LOGI(TAG, "内存已回升,应急储备已补回");
     }
 }
 
+void lv_mem_reserve_suspend(bool on)
+{
+    s_suspended = on;
+    if (on) {
+        free(take_reserve());
+        ESP_LOGI(TAG, "让出应急储备(空闲 %u)", (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT));
+    }
+}
+
 static bool release_reserve(size_t want)
 {
-    if (!s_reserve) return false;
-    free(s_reserve);
-    s_reserve = NULL;
+    void *p = take_reserve();
+    if (!p) return false;
+    free(p);
     s_used_reserve = true;
     ESP_LOGW(TAG, "界面申请 %u 字节失败,动用应急储备(空闲 %u)", (unsigned)want,
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT));

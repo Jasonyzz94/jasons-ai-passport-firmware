@@ -12,8 +12,10 @@ void relay_start(void);
 bool relay_discovery_attempted(void);
 // 当前空闲内存是否够做一次 HTTPS 握手(不够时跳过请求,避免界面因内存耗尽卡死)。
 bool local_tls_ok(void);
-// 蓝牙是否还占着射频 / 内存(运行中或正在关闭)。
+// 蓝牙是否正在启动或关闭(过渡中)。Wi-Fi 启动前等它结束。
 bool ble_radio_busy(void);
+// 蓝牙启动 / 运行期间让出界面的应急内存储备(esp_lv_mem.c)。
+void lv_mem_reserve_suspend(bool on);
 
 // 发现协议(与 server/passport_server/discovery.py 保持一致)
 #define RELAY_DISCOVERY_PORT 8788

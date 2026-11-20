@@ -158,8 +158,15 @@ static int s_start_fails;   // Wi-Fi 启动连续失败次数(内存不足等),n
 static void wifi_start(wifi_mode_t mode)
 {
     if (!s_wifi_started) {
-        // 刚从遥控器退出时蓝牙还在后台关闭:等它把内存还回来再开 Wi-Fi(最多 3 秒)。
+        // 蓝牙正在启动或关闭(例如刚从遥控器退出):等它结束再开 Wi-Fi,最多 3 秒;
+        // 还没结束就这次先不开,稍后重试,不和蓝牙同时抢内存。
         for (int i = 0; i < 30 && ble_radio_busy(); i++) vTaskDelay(pdMS_TO_TICKS(100));
+        if (ble_radio_busy()) {
+            s_start_fails++;
+            ESP_LOGW(TAG, "蓝牙仍在切换,稍后再开 Wi-Fi");
+            s_state = NET_FAILED;
+            return;
+        }
         wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
         const esp_err_t ierr = esp_wifi_init(&cfg);
         if (ierr != ESP_OK) {
