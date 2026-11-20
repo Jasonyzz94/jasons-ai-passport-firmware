@@ -55,6 +55,9 @@ void sim_scenario(void (*shot)(const char *), void (*key)(sys_key_t, sys_key_ev_
     CLICK(OK);
     LONG(UP);
     shot("17_launcher_with_chip");
+    open_app(&APP_NOISE);
+    shot("18_noise_app");
+    LONG(UP);
 
     // ---- 时钟天气 ----
     open_app(&APP_CLOCK);

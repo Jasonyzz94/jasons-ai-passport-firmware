@@ -337,5 +337,5 @@ void relay_start(void)
     if (s_lock) return;
     s_lock = xSemaphoreCreateMutex();
     sys_kv_get_str("token", s_token, sizeof(s_token));
-    xTaskCreate(relay_task, "relay", 6144, NULL, 4, &s_task);
+    xTaskCreate(relay_task, "relay", 8192, NULL, 4, &s_task);   // HTTPS 握手需要较大的栈
 }

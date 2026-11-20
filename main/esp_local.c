@@ -14,6 +14,7 @@
 
 #include "cJSON.h"
 #include "esp_crt_bundle.h"
+#include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include <stdio.h>
@@ -52,8 +53,21 @@ static esp_err_t on_data(esp_http_client_event_t *e)
 }
 
 // 通用 HTTP(S) 请求;auth 可为 NULL。返回状态码,失败 -1。
+// HTTPS 握手要临时占用二三十 KB 内存;界面(LVGL)和它共用同一个堆,内存被挤光时界面会卡死。
+// 所以内存不够时宁可这次不取,也不冒险。
+bool local_tls_ok(void)
+{
+    const size_t free_now = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+    const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    if (free_now >= 56 * 1024 && largest >= 20 * 1024) return true;
+    ESP_LOGW(TAG, "内存不足,跳过加密请求(空闲 %u,最大块 %u)", (unsigned)free_now, (unsigned)largest);
+    return false;
+}
+
 int local_http(const char *url, const char *auth, const char *body, char *out, int cap, int timeout_ms)
 {
+    if (out && cap) out[0] = '\0';
+    if (strncmp(url, "https", 5) == 0 && !local_tls_ok()) return -1;
     sink_t sink = {.buf = out, .len = 0, .cap = cap};
     if (out && cap) out[0] = '\0';
     esp_http_client_config_t cfg = {
@@ -81,6 +95,16 @@ int local_http(const char *url, const char *auth, const char *body, char *out, i
                  (unsigned)sys_free_heap());
     }
     return status;
+}
+
+// 天气数据不敏感:先走明文 HTTP(不需要 TLS,省内存也快);不通时再试 HTTPS。
+static int local_http_plain_first(const char *http_url, char *out, int cap, int timeout_ms)
+{
+    const int st = local_http(http_url, NULL, NULL, out, cap, timeout_ms);
+    if (st == 200 || strncmp(http_url, "http://", 7) != 0) return st;
+    char url[420];
+    snprintf(url, sizeof(url), "https://%s", http_url + 7);
+    return local_http(url, NULL, NULL, out, cap, timeout_ms);
 }
 
 // ---------------------------------------------------------------------------
@@ -136,8 +160,8 @@ static bool geocode_city(char *buf, int cap)
     char q[80], url[200];
     url_encode(q, sizeof(q), g_settings.city);
     snprintf(url, sizeof(url),
-             "https://geocoding-api.open-meteo.com/v1/search?name=%s&count=1&language=zh&format=json", q);
-    if (local_http(url, NULL, NULL, buf, cap, 8000) != 200) return false;
+             "http://geocoding-api.open-meteo.com/v1/search?name=%s&count=1&language=zh&format=json", q);
+    if (local_http_plain_first(url, buf, cap, 8000) != 200) return false;
     cJSON *j = cJSON_Parse(buf);
     const cJSON *r = cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(j, "results"), 0);
     const cJSON *lat = cJSON_GetObjectItemCaseSensitive(r, "latitude");
@@ -174,13 +198,13 @@ static int weather(char *out, int cap)
     }
     char url[400];
     snprintf(url, sizeof(url),
-             "https://api.open-meteo.com/v1/forecast?latitude=%s&longitude=%s&timezone=auto"
+             "http://api.open-meteo.com/v1/forecast?latitude=%s&longitude=%s&timezone=auto"
              "&forecast_days=4&forecast_hours=7"
              "&current=temperature_2m,relative_humidity_2m,weather_code,is_day"
              "&hourly=temperature_2m,weather_code"
              "&daily=weather_code,temperature_2m_max,temperature_2m_min",
              manual ? g_settings.lat : s_geo_lat, manual ? g_settings.lon : s_geo_lon);
-    const int st = local_http(url, NULL, NULL, buf, FETCH_MAX, 10000);
+    const int st = local_http_plain_first(url, buf, FETCH_MAX, 10000);
     const char *city = g_settings.city[0] ? g_settings.city : s_geo_city;
     const bool ok = st == 200 && weather_shape(buf, city, out, (size_t)cap);
     free(buf);
@@ -200,7 +224,7 @@ static void fetch_fx(void)
     s_fx_at = sys_now_ms();
     char *buf = malloc(FETCH_MAX);
     if (!buf) return;
-    if (local_http("https://open.er-api.com/v6/latest/USD", NULL, NULL, buf, FETCH_MAX, 8000) == 200) {
+    if (local_http_plain_first("http://open.er-api.com/v6/latest/USD", buf, FETCH_MAX, 8000) == 200) {
         cJSON *j = cJSON_Parse(buf);
         const cJSON *rates = cJSON_GetObjectItemCaseSensitive(j, "rates");
         const cJSON *cny = cJSON_GetObjectItemCaseSensitive(rates, "CNY");
@@ -240,6 +264,10 @@ static void fetch_calendar(void)
     if (!strncmp(g_settings.ics_url, "webcal://", 9)) snprintf(url, sizeof(url), "https://%s", g_settings.ics_url + 9);
     else snprintf(url, sizeof(url), "%s", g_settings.ics_url);
 
+    if (strncmp(url, "https", 5) == 0 && !local_tls_ok()) {
+        s_cal_at = sys_now_ms() - 540000;   // 1 分钟后再试
+        return;
+    }
     static ics_state_t st;
     const int64_t now = ics_minutes(tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min);
     ics_init(&st, now, tz_offset_minutes(), 7);

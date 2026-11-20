@@ -12,7 +12,7 @@ typedef struct {
 
 #define E(x) { #x, &x }
 static const entry_t k_all[] = {
-    E(ICON_TOMATO), E(ICON_WEATHER), E(ICON_REMOTE), E(ICON_SOUND), E(ICON_AI),
+    E(ICON_TOMATO), E(ICON_WEATHER), E(ICON_REMOTE), E(ICON_SOUND), E(ICON_NOISE), E(ICON_AI),
     E(ICON_LINK), E(ICON_HOME), E(ICON_BOARD), E(ICON_WIFI), E(ICON_TIMER),
     E(ICON_DICE), E(ICON_GEAR),
     E(WX_SUN), E(WX_PARTLY), E(WX_CLOUD), E(WX_RAIN), E(WX_SNOW), E(WX_STORM),

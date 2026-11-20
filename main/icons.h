@@ -8,6 +8,7 @@ extern const pixel_sprite_t ICON_TOMATO;
 extern const pixel_sprite_t ICON_WEATHER;
 extern const pixel_sprite_t ICON_REMOTE;
 extern const pixel_sprite_t ICON_SOUND;
+extern const pixel_sprite_t ICON_NOISE;
 extern const pixel_sprite_t ICON_AI;
 extern const pixel_sprite_t ICON_LINK;
 extern const pixel_sprite_t ICON_HOME;

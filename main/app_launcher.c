@@ -8,7 +8,7 @@
 #include <stdio.h>
 
 const app_t *const APPS[] = {
-    &APP_POMODORO, &APP_CLOCK, &APP_AI, &APP_REMOTE, &APP_SOUND, &APP_LINK,
+    &APP_POMODORO, &APP_NOISE, &APP_CLOCK, &APP_AI, &APP_REMOTE, &APP_SOUND, &APP_LINK,
     &APP_HOME, &APP_BOARD, &APP_WIFI, &APP_TIMER, &APP_DICE, &APP_SETTINGS,
 };
 const int APP_COUNT = (int)(sizeof(APPS) / sizeof(APPS[0]));

@@ -561,11 +561,22 @@ static void build_page(page_t page)
     lv_obj_fade_in(s_page, 140, 0);
 }
 
+static bool s_noise_app;   // 从主菜单"白噪音"直接进入:长按 ▲ 回启动器
+
 static void create(lv_obj_t *root)
 {
     s_root = root;
     s_page = NULL;
+    s_noise_app = false;
     build_page(PAGE_MAIN);
+}
+
+static void create_noise(lv_obj_t *root)
+{
+    s_root = root;
+    s_page = NULL;
+    s_noise_app = true;
+    build_page(PAGE_NOISE);
 }
 
 static void destroy(void)
@@ -626,6 +637,7 @@ static bool key(sys_key_t k, sys_key_ev_t ev)
 
     case PAGE_NOISE:
         if (k == SYS_KEY_UP && !click) {
+            if (s_noise_app) return false;   // 交给 shell 回启动器
             build_page(PAGE_MENU);
             ui_list_focus(&s_list, MENU_NOISE, false);
             return true;
@@ -677,6 +689,18 @@ const app_t APP_POMODORO = {
     .icon = &ICON_TOMATO,
     .color = C_TOMATO,
     .create = create,
+    .destroy = destroy,
+    .key = key,
+    .tick = tick,
+};
+
+// 主菜单里的独立入口(排在番茄钟下面),与番茄钟共用同一个白噪音服务。
+const app_t APP_NOISE = {
+    .name = "白噪音",
+    .desc = "雨声 · 海浪 · 定时关",
+    .icon = &ICON_NOISE,
+    .color = 0x818CF8,
+    .create = create_noise,
     .destroy = destroy,
     .key = key,
     .tick = tick,

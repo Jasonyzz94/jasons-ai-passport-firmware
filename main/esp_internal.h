@@ -10,6 +10,8 @@ const char *relay_token(void);
 void relay_start(void);
 // 本次联网后是否已完成过一次服务器发现(无论成败)。
 bool relay_discovery_attempted(void);
+// 当前空闲内存是否够做一次 HTTPS 握手(不够时跳过请求,避免界面因内存耗尽卡死)。
+bool local_tls_ok(void);
 
 // 发现协议(与 server/passport_server/discovery.py 保持一致)
 #define RELAY_DISCOVERY_PORT 8788

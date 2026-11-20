@@ -5,6 +5,7 @@
 
 extern const app_t APP_LAUNCHER;
 extern const app_t APP_POMODORO;
+extern const app_t APP_NOISE;
 extern const app_t APP_CLOCK;
 extern const app_t APP_AI;
 extern const app_t APP_REMOTE;

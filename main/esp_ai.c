@@ -215,6 +215,7 @@ static esp_http_client_handle_t open_direct(const char *path, int timeout)
 {
     char url[160];
     snprintf(url, sizeof(url), "%s%s", g_settings.api_base, path);
+    if (strncmp(url, "https", 5) == 0 && !local_tls_ok()) return NULL;
     esp_http_client_config_t cfg = {
         .url = url,
         .method = HTTP_METHOD_POST,
