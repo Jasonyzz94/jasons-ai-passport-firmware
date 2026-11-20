@@ -453,11 +453,23 @@ static void direct_talk(void)
     direct_speak(answer);
 }
 
+static volatile bool s_quit;   // 离开语音助手:任务空闲后自行退出并释放约 14KB
+
 static void ai_task(void *arg)
 {
     (void)arg;
     for (;;) {
+        if (s_quit) {
+            audio_capture_stop();
+            StreamBufferHandle_t st = s_stream;
+            s_stream = NULL;
+            if (st) vStreamBufferDelete(st);
+            ESP_LOGI(TAG, "语音助手已释放(空闲 %u)", (unsigned)sys_free_heap());
+            s_task = NULL;
+            vTaskDelete(NULL);
+        }
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        if (s_quit) continue;
         if (s_replay) {
             s_replay = false;
             s_cancel = false;
@@ -486,10 +498,20 @@ bool ai_talk_begin(void)
         fail("音频不可用");
         return false;
     }
+    // 上一次离开时任务还在退出:稍等它释放完
+    for (int i = 0; i < 25 && s_quit && s_task; i++) vTaskDelay(pdMS_TO_TICKS(20));
+    if (s_quit && s_task) {
+        fail("正在释放,请再试一次");
+        return false;
+    }
+    s_quit = false;
+    if (!s_lock) s_lock = xSemaphoreCreateMutex();
     if (!s_task) {
-        s_lock = xSemaphoreCreateMutex();
         s_stream = xStreamBufferCreate(STREAM_BYTES, 1);
         if (!s_stream || xTaskCreate(ai_task, "ai", 6144, NULL, 5, &s_task) != pdPASS) {
+            if (s_stream) vStreamBufferDelete(s_stream);
+            s_stream = NULL;
+            s_task = NULL;
             fail("内存不足");
             return false;
         }
@@ -510,6 +532,16 @@ bool ai_talk_begin(void)
 }
 
 void ai_talk_end(void) { s_end = true; }
+
+void ai_release(void)
+{
+    if (!s_task) return;
+    ai_cancel();
+    s_quit = true;
+    xTaskNotifyGive(s_task);
+}
+
+bool ai_active(void) { return s_task != NULL; }
 
 void ai_cancel(void)
 {

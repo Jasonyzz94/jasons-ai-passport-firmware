@@ -1,6 +1,7 @@
 // main/app_settings.c —— 设置:Wi-Fi 配网(手机扫码)、服务器、亮度、音量、息屏、按键音、关于、重启、恢复出厂。
 #include "apps.h"
 #include "icons.h"
+#include "noise_gen.h"
 #include "settings.h"
 #include "svc.h"
 #include "ui.h"
@@ -8,10 +9,10 @@
 #include <stdio.h>
 #include <string.h>
 
-typedef enum { PAGE_LIST = 0, PAGE_PORTAL, PAGE_ABOUT } page_t;
+typedef enum { PAGE_LIST = 0, PAGE_PORTAL, PAGE_ABOUT, PAGE_BG } page_t;
 enum {
     ROW_WIFI = 0, ROW_SERVER, ROW_BRIGHT, ROW_VOLUME, ROW_TIMEOUT, ROW_CLICK,
-    ROW_ABOUT, ROW_RESTART, ROW_RESET, ROW_COUNT,
+    ROW_BG, ROW_ABOUT, ROW_RESTART, ROW_RESET, ROW_COUNT,
 };
 
 static lv_obj_t *s_root;
@@ -82,6 +83,7 @@ static void build_list(lv_obj_t *p)
     ui_list_add(&s_list, &IC_MUSIC, "音量", "", false);
     ui_list_add(&s_list, &ICON_TIMER, "自动息屏", "", false);
     ui_list_add(&s_list, &IC_BELL, "按键音", "", false);
+    ui_list_add(&s_list, &IC_SENSOR, "后台运行", NULL, true);
     ui_list_add(&s_list, &IC_CHECK, "关于本机", NULL, true);
     ui_list_add(&s_list, &ICON_GEAR, "重启", NULL, false);
     ui_list_add(&s_list, &IC_CLOUD_OFF, "恢复出厂设置", NULL, false);
@@ -189,6 +191,59 @@ static void build_about(lv_obj_t *p)
 }
 
 // ---------------------------------------------------------------------------
+// 后台运行:哪些服务开着、内存还剩多少。没在用的服务会自己释放内存。
+// ---------------------------------------------------------------------------
+static lv_obj_t *s_bg_rows[8];
+static lv_obj_t *s_bg_mem;
+static const char *const k_bg_names[] = {"无线网络", "蓝牙", "双机互联", "白噪音", "语音助手", "服务器通信"};
+#define BG_ROWS ((int)(sizeof(k_bg_names) / sizeof(k_bg_names[0])))
+
+static void bg_render(void)
+{
+    static const char *const ble_names[] = {"关闭", "启动中", "等待配对", "已连接", "出错"};
+    const ble_state_t bs = ble_hid_state();
+    const int noise = audio_noise_current();
+    const char *val[BG_ROWS] = {
+        !net_radio_on() ? "关闭" : net_state() == NET_CONNECTED ? "已连接" : "连接中",
+        ble_names[bs <= BLE_FAILED ? bs : 0],
+        link_running() ? "在线" : "关闭",
+        noise ? noise_name((noise_type_t)noise) : "关闭",
+        ai_active() ? "已加载" : "未加载",
+        relay_task_running() ? "运行中" : "休眠",
+    };
+    const bool on[BG_ROWS] = {net_radio_on(), bs != BLE_OFF, link_running(), noise != 0, ai_active(),
+                              relay_task_running()};
+    for (int i = 0; i < BG_ROWS; i++) {
+        lv_label_set_text(s_bg_rows[i], val[i]);
+        lv_obj_set_style_text_color(s_bg_rows[i], ui_c(on[i] ? C_OK : C_TEXT3), 0);
+    }
+    const unsigned free_kb = (unsigned)(sys_free_heap() / 1024);
+    lv_label_set_text_fmt(s_bg_mem, "空闲内存 %u KB · 最大连续 %u KB", free_kb,
+                          (unsigned)(sys_largest_block() / 1024));
+    lv_obj_set_style_text_color(s_bg_mem, ui_c(free_kb < 30 ? C_WARN : C_TEXT2), 0);
+}
+
+static void build_bg(lv_obj_t *p)
+{
+    lv_obj_t *t = ui_label(p, &ui_font_20b, C_TEXT, "后台运行");
+    lv_obj_set_pos(t, UI_PAD + 4, 4);
+    lv_obj_t *card = ui_card(p, UI_PAD, 40, UI_W - 2 * UI_PAD, BG_ROWS * 26 + 14, C_SURFACE, 16);
+    for (int i = 0; i < BG_ROWS; i++) {
+        lv_obj_t *k = ui_label(card, &ui_font_16, C_TEXT2, k_bg_names[i]);
+        lv_obj_set_pos(k, 14, 8 + i * 26);
+        s_bg_rows[i] = ui_label(card, &ui_font_16, C_TEXT3, "");
+        lv_obj_align(s_bg_rows[i], LV_ALIGN_TOP_RIGHT, -14, 8 + i * 26);
+    }
+    s_bg_mem = ui_label_w(p, &ui_font_14, C_TEXT2, UI_W, LV_TEXT_ALIGN_CENTER, "");
+    lv_obj_set_pos(s_bg_mem, 0, 40 + BG_ROWS * 26 + 24);
+    lv_obj_t *tip = ui_label_w(p, &ui_font_14, C_TEXT3, UI_W - 2 * UI_PAD, LV_TEXT_ALIGN_CENTER,
+                               "离开功能后会自动关闭并释放内存");
+    lv_obj_set_pos(tip, UI_PAD, 40 + BG_ROWS * 26 + 46);
+    bg_render();
+    shell_hints("长▲:返回");
+}
+
+// ---------------------------------------------------------------------------
 static void build(page_t page)
 {
     if (s_page) lv_obj_delete(s_page);
@@ -197,6 +252,7 @@ static void build(page_t page)
     switch (page) {
     case PAGE_PORTAL: build_portal(s_page); break;
     case PAGE_ABOUT: build_about(s_page); break;
+    case PAGE_BG: build_bg(s_page); break;
     default: build_list(s_page); break;
     }
 }
@@ -313,6 +369,7 @@ static bool key(sys_key_t k, sys_key_ev_t ev)
         settings_save();
         list_values();
         break;
+    case ROW_BG: build(PAGE_BG); break;
     case ROW_ABOUT: build(PAGE_ABOUT); break;
     case ROW_RESTART: shell_confirm("重启设备?", NULL, restart_answer); break;
     default:
@@ -392,6 +449,7 @@ static void tick(int64_t now)
     } else if (now - last > 1000) {
         last = now;
         if (s_kind == PAGE_ABOUT) about_render();
+        else if (s_kind == PAGE_BG) bg_render();
         else if (!s_editing) list_values();
     }
 }

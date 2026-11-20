@@ -246,6 +246,10 @@ void sim_scenario(void (*shot)(const char *), void (*key)(sys_key_t, sys_key_ev_
     LONG(UP);
     for (int i = 0; i < 6; i++) CLICK(DOWN);
     CLICK(OK);
+    shot("C3a_background");
+    LONG(UP);
+    CLICK(DOWN);
+    CLICK(OK);
     shot("C3_about");
     LONG(UP);
     CLICK(DOWN); CLICK(DOWN);

@@ -246,6 +246,8 @@ static void build(page_t page)
     }
 }
 
+static bool s_paused_link;   // 进入遥控时暂停了互联,退出时恢复
+
 static void create(lv_obj_t *root)
 {
     s_root = root;
@@ -255,6 +257,12 @@ static void create(lv_obj_t *root)
     s_holding = false;
     s_page = NULL;
     build(PAGE_MODES);
+    // 互联后台在线会让 Wi-Fi 一直开着,和蓝牙抢内存:遥控期间先暂停,退出后恢复。
+    s_paused_link = link_running();
+    if (s_paused_link) {
+        link_stop();
+        shell_toast("遥控期间暂停互联");
+    }
     if (!ble_hid_start()) shell_toast("蓝牙启动失败");
 }
 
@@ -262,6 +270,8 @@ static void destroy(void)
 {
     voice_release();
     ble_hid_stop();
+    if (s_paused_link) link_start();
+    s_paused_link = false;
     s_root = NULL;
     s_page = NULL;
 }

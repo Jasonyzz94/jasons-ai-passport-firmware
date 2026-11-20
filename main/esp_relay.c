@@ -38,7 +38,8 @@ typedef struct {
 
 static slot_t s_slots[SLOTS];
 static SemaphoreHandle_t s_lock;
-static TaskHandle_t s_task;
+static TaskHandle_t volatile s_task;
+static portMUX_TYPE s_task_mux = portMUX_INITIALIZER_UNLOCKED;
 static volatile srv_state_t s_state = SRV_UNKNOWN;
 static volatile bool s_discover;
 static char s_url[96];
@@ -65,6 +66,7 @@ void relay_discover(void)
 {
     s_attempted = false;
     s_discover = true;
+    relay_start();   // Wi-Fi 刚连上:任务可能已因断网退出,重新建
     if (s_task) xTaskNotifyGive(s_task);
 }
 
@@ -235,8 +237,38 @@ static void relay_task(void *arg)
 {
     (void)arg;
     int64_t next_auto = 0;
+    int64_t radio_off_since = 0;
     for (;;) {
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000));
+        // Wi-Fi 关掉 10 秒、手上也没有请求:任务退出,还回约 7KB;下次联网或有请求时再建。
+        if (!net_radio_on()) {
+            if (!radio_off_since) radio_off_since = sys_now_ms();
+        } else {
+            radio_off_since = 0;
+        }
+        if (radio_off_since && sys_now_ms() - radio_off_since > 10000) {
+            bool quit = true;
+            taskENTER_CRITICAL(&s_task_mux);
+            for (int i = 0; i < SLOTS; i++) {
+                if (s_slots[i].state != REQ_FREE && !s_slots[i].abandoned) quit = false;
+            }
+            if (quit) s_task = NULL;
+            taskEXIT_CRITICAL(&s_task_mux);
+            if (quit) {
+                for (int i = 0; i < SLOTS; i++) {   // 回收已放弃的请求(只碰已放弃的,新请求不受影响)
+                    slot_t *s = &s_slots[i];
+                    if (s->state != REQ_FREE && s->abandoned) {
+                        free(s->body);
+                        free(s->resp);
+                        s->body = s->resp = NULL;
+                        s->abandoned = false;
+                        s->state = REQ_FREE;
+                    }
+                }
+                ESP_LOGI(TAG, "Wi-Fi 已关,服务器通信任务退出(空闲 %u)", (unsigned)sys_free_heap());
+                vTaskDelete(NULL);
+            }
+        }
         if (net_state() != NET_CONNECTED) {
             // 断网时也要回收已被应用放弃的请求:以前它们会一直占着(每个约 6KB),
             // 多开几次天气 / 看板后内存就被吃掉,之后蓝牙因内存不足无法广播。
@@ -311,7 +343,8 @@ int relay_request(const char *path, const char *json_body)
         s->status = 0;
         s->abandoned = false;
         s->state = REQ_BUSY;
-        xTaskNotifyGive(s_task);
+        relay_start();   // 先标记请求再确认任务在:任务只在没有请求时退出,不会漏掉
+        if (s_task) xTaskNotifyGive(s_task);
         return i;
     }
     return -1;
@@ -345,11 +378,20 @@ void relay_free(int h)
     s->state = REQ_FREE;
 }
 
-// 开机时启动后台任务(以便 Wi-Fi 一连上就开始发现)。
+// 确保后台任务在运行:开机、Wi-Fi 连上、发起请求时调用。Wi-Fi 关掉后任务会自己退出。
 void relay_start(void)
 {
-    if (s_lock) return;
-    s_lock = xSemaphoreCreateMutex();
-    sys_kv_get_str("token", s_token, sizeof(s_token));
-    xTaskCreate(relay_task, "relay", 7168, NULL, 4, &s_task);   // HTTPS 握手需要较大的栈
+    if (!s_lock) {
+        s_lock = xSemaphoreCreateMutex();
+        sys_kv_get_str("token", s_token, sizeof(s_token));
+    }
+    taskENTER_CRITICAL(&s_task_mux);
+    const bool need = s_task == NULL;
+    taskEXIT_CRITICAL(&s_task_mux);
+    if (need && xTaskCreate(relay_task, "relay", 7168, NULL, 4, (TaskHandle_t *)&s_task) != pdPASS) {
+        s_task = NULL;   // HTTPS 握手需要较大的栈
+        ESP_LOGW(TAG, "服务器通信任务创建失败(空闲 %u)", (unsigned)sys_free_heap());
+    }
 }
+
+bool relay_task_running(void) { return s_task != NULL; }

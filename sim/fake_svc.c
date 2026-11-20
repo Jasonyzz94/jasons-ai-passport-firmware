@@ -242,6 +242,10 @@ bool link_partner_online(void) { return g_fake.link_paired; }
 bool ai_talk_begin(void) { g_fake.ai = AI_LISTENING; return true; }
 void ai_talk_end(void) { g_fake.ai = AI_THINKING; }
 void ai_cancel(void) { g_fake.ai = AI_IDLE; }
+void ai_release(void) { g_fake.ai = AI_IDLE; }
+bool ai_active(void) { return false; }
+bool relay_task_running(void) { return true; }
+const char *ble_hid_error(void) { return ""; }
 ai_state_t ai_state(void) { return g_fake.ai; }
 const char *ai_error(void) { return "服务器无响应"; }
 bool ai_take_result(char *q, size_t ql, char *a, size_t al)

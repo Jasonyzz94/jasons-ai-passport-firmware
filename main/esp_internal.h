@@ -8,6 +8,7 @@ esp_netif_t *net_sta_netif(void);
 // 中转服务器的设备令牌(配对后获得,可能为空串)。
 const char *relay_token(void);
 void relay_start(void);
+bool relay_task_running(void);
 // 本次联网后是否已完成过一次服务器发现(无论成败)。
 bool relay_discovery_attempted(void);
 // 当前空闲内存是否够做一次 HTTPS 握手(不够时跳过请求,避免界面因内存耗尽卡死)。

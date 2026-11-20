@@ -161,7 +161,7 @@ static void create(lv_obj_t *root)
 
 static void destroy(void)
 {
-    if (ai_state() != AI_IDLE && ai_state() != AI_ERROR) ai_cancel();
+    ai_release();   // 取消进行中的对话并释放后台任务
     shell_keep_awake(false);
     net_release();
     s_root = NULL;

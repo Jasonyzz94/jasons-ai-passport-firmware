@@ -77,7 +77,8 @@ typedef struct {
 
 static esp_hidd_dev_t *s_dev;
 static QueueHandle_t s_act;
-static TaskHandle_t s_worker;
+static TaskHandle_t volatile s_worker;
+static portMUX_TYPE s_worker_mux = portMUX_INITIALIZER_UNLOCKED;
 static volatile ble_state_t s_state = BLE_OFF;
 static volatile bool s_running;
 static volatile bool s_stop_pending;   // 已请求关闭、hid 任务还没处理完
@@ -225,6 +226,15 @@ static void worker(void *arg)
         if (a.type == ACT_STOP) {
             do_stop();
             s_stop_pending = false;
+            // 蓝牙关了且没有新请求:hid 任务自己退出,还回 4KB 栈;下次进遥控器再建。
+            bool quit = false;
+            taskENTER_CRITICAL(&s_worker_mux);
+            if (uxQueueMessagesWaiting(s_act) == 0) {
+                s_worker = NULL;
+                quit = true;
+            }
+            taskEXIT_CRITICAL(&s_worker_mux);
+            if (quit) vTaskDelete(NULL);
             continue;
         }
         if (s_state != BLE_CONNECTED || !s_dev) {
@@ -390,23 +400,33 @@ static void do_stop(void)
 // 启停都交给 hid 任务异步执行:界面线程不等待 NimBLE 初始化 / 关闭。
 bool ble_hid_start(void)
 {
+    if (!s_act) s_act = xQueueCreate(16, sizeof(act_t));
     if (!s_act) {
-        s_act = xQueueCreate(16, sizeof(act_t));
-        if (!s_act || xTaskCreate(worker, "hid", 4096, NULL, 4, &s_worker) != pdPASS) {
-            s_state = BLE_FAILED;
-            return false;
-        }
+        fail("内存不足");
+        return false;
     }
-    if (s_running) return true;
+    if (s_running && !s_stop_pending) return true;
     s_state = BLE_STARTING;
     s_start_ms = sys_now_ms();
     act_t a = {.type = ACT_START};
-    return xQueueSend(s_act, &a, 0) == pdTRUE;
+    if (xQueueSend(s_act, &a, pdMS_TO_TICKS(100)) != pdTRUE) return false;
+    // 先入队再看任务在不在:任务只会在队列为空时退出,所以这里不会漏掉启动请求。
+    taskENTER_CRITICAL(&s_worker_mux);
+    const bool need = s_worker == NULL;
+    taskEXIT_CRITICAL(&s_worker_mux);
+    // 句柄在任务开始运行前就写好,不会和任务自己清空句柄冲突。
+    if (need && xTaskCreate(worker, "hid", 4096, NULL, 4, (TaskHandle_t *)&s_worker) != pdPASS) {
+        s_worker = NULL;
+        fail("内存不足");
+        return false;
+    }
+    return true;
 }
 
 void ble_hid_stop(void)
 {
-    if (!s_act) return;
+    // 没有 hid 任务就没有在运行的蓝牙;这时入队的停止请求没人处理,会让 Wi-Fi 一直等。
+    if (!s_act || !s_worker) return;
     act_t a = {.type = ACT_STOP};
     s_stop_pending = true;
     if (xQueueSend(s_act, &a, pdMS_TO_TICKS(100)) != pdTRUE) s_stop_pending = false;

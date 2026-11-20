@@ -244,3 +244,10 @@ const char *ai_error(void);
 // 新一轮问答完成时返回 true 并拷出文本。
 bool ai_take_result(char *question, size_t qlen, char *answer, size_t alen);
 void ai_replay(void);
+// 离开语音助手时调用:后台任务与缓冲区(约 14KB)空闲后释放。
+void ai_release(void);
+bool ai_active(void);
+
+// 后台运行情况(设置 → 后台运行 页面显示)
+bool net_radio_on(void);          // Wi-Fi 射频是否开着
+bool relay_task_running(void);    // 服务器通信任务是否在运行(Wi-Fi 关掉后会自动退出)
