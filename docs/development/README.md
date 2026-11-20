@@ -11,6 +11,10 @@ This directory contains AI Passport engineering rules and reusable workflows, gr
 - [ai-guide.md](ai-guide.md): AI-assisted development workflow.
 - [Core AI skills](../../skills/README.md): development, setup, build, device testing, and diagnosis; installation and usage examples.
 
+## Application handoffs
+
+- [Pocket toolbox development handoff](toolbox-handoff.md) covers offline weather, QR setup, Wi-Fi profiles, and voice configuration.
+
 ## Engineering
 
 - [game-demo-to-device-acceptance.md](engineering/game-demo-to-device-acceptance.md): shared C/WebAssembly and H5 playtesting, then physical-device acceptance.
