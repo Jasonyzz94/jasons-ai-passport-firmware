@@ -133,6 +133,12 @@ run_static_checks() {
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/test_ics_parse.c main/ics_parse.c -o "${test_dir}/test_ics_parse"
     "${test_dir}/test_ics_parse"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_pet.c main/pet.c -o "${test_dir}/test_pet"
+    "${test_dir}/test_pet"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_breath.c main/breath.c -o "${test_dir}/test_breath"
+    "${test_dir}/test_breath"
     for demo in audio low_power ble wifi; do
         "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
             -ffunction-sections -fdata-sections -Itests/demo_stubs -Imain \

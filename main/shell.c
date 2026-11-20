@@ -40,6 +40,11 @@ static shell_chip_fn_t s_chip_fn;
 static bool s_screen_on = true;
 static bool s_dimmed;
 static bool s_swallow_until_release;
+// 按键驱动在"松开"之后才发"单击"(要等双击窗口过去)。唤醒用的那次按键松开后,
+// 同一个键在这段时间内的单击/双击也要吞掉,否则会误触发(例如息屏时按确定唤醒却把番茄钟暂停)。
+static sys_key_t s_swallow_key;
+static int64_t s_swallow_click_until;
+#define WAKE_CLICK_GRACE_MS 450
 static bool s_keep_awake;
 static int64_t s_last_input;
 
@@ -431,10 +436,20 @@ static void handle_key(sys_key_t key, sys_key_ev_t ev)
 {
     const int64_t now = sys_now_ms();
     if (s_swallow_until_release) {
-        if (ev == SYS_EV_RELEASE) s_swallow_until_release = false;
+        if (ev == SYS_EV_RELEASE) {
+            s_swallow_until_release = false;
+            s_swallow_click_until = now + WAKE_CLICK_GRACE_MS;
+        }
         s_last_input = now;
         return;
     }
+    if (s_swallow_click_until && (ev == SYS_EV_CLICK || ev == SYS_EV_DOUBLE) && key == s_swallow_key
+        && now <= s_swallow_click_until) {
+        s_swallow_click_until = 0;
+        s_last_input = now;
+        return;
+    }
+    if (ev == SYS_EV_PRESS) s_swallow_click_until = 0;   // 新的一次按下:不再吞
     if ((!s_screen_on || s_dimmed) && s_app && (s_app->flags & APP_FLAG_KEYS_WHEN_OFF)
         && s_overlay_kind == OVL_NONE) {
         s_last_input = now;
@@ -447,7 +462,9 @@ static void handle_key(sys_key_t key, sys_key_ev_t ev)
         const bool was_off = !s_screen_on;
         shell_wake();
         // 从息屏唤醒:吞掉这次按键直到松手,避免误触发功能。调暗时同样只点亮。
+        s_swallow_key = key;
         if (ev != SYS_EV_RELEASE) s_swallow_until_release = true;
+        else s_swallow_click_until = now + WAKE_CLICK_GRACE_MS;
         (void)was_off;
         return;
     }

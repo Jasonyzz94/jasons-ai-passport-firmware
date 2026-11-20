@@ -17,6 +17,9 @@ extern const app_t APP_WIFI;
 extern const app_t APP_TIMER;
 extern const app_t APP_DICE;
 extern const app_t APP_SETTINGS;
+// 已写好、暂未放进启动器的应用(按用户要求先不接入;加进 app_launcher.c 的 APPS[] 即可启用)。
+extern const app_t APP_PET;
+extern const app_t APP_BREATH;
 
 extern const app_t *const APPS[];
 extern const int APP_COUNT;

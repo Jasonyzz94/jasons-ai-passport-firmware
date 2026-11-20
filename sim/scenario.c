@@ -58,6 +58,25 @@ void sim_scenario(void (*shot)(const char *), void (*key)(sys_key_t, sys_key_ev_
     open_app(&APP_NOISE);
     shot("18_noise_app");
     LONG(UP);
+    // ---- 暂未放进启动器的应用 ----
+    open_app(&APP_PET);
+    shot("19a_pet");
+    CLICK(OK); CLICK(DOWN); CLICK(OK); CLICK(OK);
+    run_ms(300);
+    shot("19b_pet_hatched");
+    LONG(UP);
+    open_app(&APP_BREATH);
+    shot("19c_breath_idle");
+    CLICK(DOWN);
+    CLICK(OK);
+    run_ms(2000);
+    shot("19d_breath_in");
+    run_ms(4500);
+    shot("19e_breath_hold");
+    run_ms(9000);
+    shot("19f_breath_out");
+    LONG(UP);
+    LONG(UP);
 
     // ---- 时钟天气 ----
     open_app(&APP_CLOCK);
