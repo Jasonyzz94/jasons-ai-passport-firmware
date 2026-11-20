@@ -2,6 +2,7 @@
 #include "apps.h"
 #include "icons.h"
 #include "noise_gen.h"
+#include "voice_cfg.h"
 #include "settings.h"
 #include "svc.h"
 #include "ui.h"
@@ -395,8 +396,25 @@ static void tick(int64_t now)
             }
             // 普通字段:提交什么就存什么(清空也生效);密钥类字段留空表示不修改。
             SET(g_settings.server, f.server);
-            if (f.api_base[0]) SET(g_settings.api_base, f.api_base);
+            // 语音助手。密钥绑定接口:换了接口地址却没填新密钥,就清掉旧密钥,不发给别家。
+            if (f.clear_keys) {
+                g_settings.api_key[0] = '\0';
+                g_settings.voice_key[0] = '\0';
+            }
+            if (f.ai_mode >= VOICE_MODE_AUTO && f.ai_mode <= VOICE_MODE_DIRECT) g_settings.ai_mode = f.ai_mode;
+            if (f.tts_rate == VOICE_TTS_OFF || f.tts_rate == VOICE_TTS_16K || f.tts_rate == VOICE_TTS_24K) {
+                g_settings.tts_rate = f.tts_rate;
+            }
+            if (f.api_base[0] && strcmp(f.api_base, g_settings.api_base) != 0) {
+                SET(g_settings.api_base, f.api_base);
+                if (!f.api_key[0]) g_settings.api_key[0] = '\0';
+            }
             if (f.api_key[0]) SET(g_settings.api_key, f.api_key);
+            if (strcmp(f.voice_base, g_settings.voice_base) != 0) {   // 语音接口可以清空(= 同对话)
+                SET(g_settings.voice_base, f.voice_base);
+                if (!f.voice_key[0]) g_settings.voice_key[0] = '\0';
+            }
+            if (f.voice_key[0]) SET(g_settings.voice_key, f.voice_key);
             if (f.llm_model[0]) SET(g_settings.llm_model, f.llm_model);
             if (f.asr_model[0]) SET(g_settings.asr_model, f.asr_model);
             if (f.tts_model[0]) SET(g_settings.tts_model, f.tts_model);

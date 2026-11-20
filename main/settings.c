@@ -2,6 +2,7 @@
 #include "settings.h"
 
 #include "sys.h"
+#include "voice_cfg.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -29,7 +30,11 @@ static void defaults(void)
     snprintf(g_settings.llm_model, sizeof(g_settings.llm_model), "deepseek-ai/DeepSeek-V3");
     snprintf(g_settings.tts_model, sizeof(g_settings.tts_model), "FunAudioLLM/CosyVoice2-0.5B");
     snprintf(g_settings.tts_voice, sizeof(g_settings.tts_voice), "FunAudioLLM/CosyVoice2-0.5B:anna");
+    g_settings.ai_mode = VOICE_MODE_AUTO;
+    g_settings.tts_rate = VOICE_TTS_16K;
 }
+
+static int valid_rate(int r) { return r == VOICE_TTS_OFF || r == VOICE_TTS_24K ? r : VOICE_TTS_16K; }
 
 // 读字符串设置:存储里是空串时保留默认值(避免旧版本写入的空值覆盖默认)。
 static void load_str(const char *key, char *dst, size_t len)
@@ -63,6 +68,10 @@ void settings_load(void)
     load_str("lon", g_settings.lon, sizeof(g_settings.lon));
     load_str("api_base", g_settings.api_base, sizeof(g_settings.api_base));
     sys_kv_get_str("api_key", g_settings.api_key, sizeof(g_settings.api_key));
+    sys_kv_get_str("voice_base", g_settings.voice_base, sizeof(g_settings.voice_base));
+    sys_kv_get_str("voice_key", g_settings.voice_key, sizeof(g_settings.voice_key));
+    g_settings.ai_mode = clampi(sys_kv_get_i32("ai_mode", VOICE_MODE_AUTO), VOICE_MODE_AUTO, VOICE_MODE_DIRECT);
+    g_settings.tts_rate = valid_rate(sys_kv_get_i32("tts_rate", VOICE_TTS_16K));
     load_str("asr_model", g_settings.asr_model, sizeof(g_settings.asr_model));
     load_str("llm_model", g_settings.llm_model, sizeof(g_settings.llm_model));
     load_str("tts_model", g_settings.tts_model, sizeof(g_settings.tts_model));
@@ -90,6 +99,10 @@ void settings_save(void)
     sys_kv_set_str("lon", g_settings.lon);
     sys_kv_set_str("api_base", g_settings.api_base);
     sys_kv_set_str("api_key", g_settings.api_key);
+    sys_kv_set_str("voice_base", g_settings.voice_base);
+    sys_kv_set_str("voice_key", g_settings.voice_key);
+    sys_kv_set_i32("ai_mode", g_settings.ai_mode);
+    sys_kv_set_i32("tts_rate", g_settings.tts_rate);
     sys_kv_set_str("asr_model", g_settings.asr_model);
     sys_kv_set_str("llm_model", g_settings.llm_model);
     sys_kv_set_str("tts_model", g_settings.tts_model);

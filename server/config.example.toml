@@ -12,25 +12,51 @@ latitude = 31.23
 longitude = 121.47
 timezone = "Asia/Shanghai"
 
+# ---------------------------------------------------------------------------
+# 语音助手 = 识别(语音→文字) + 对话 + 朗读(文字→语音)。三步可以分别选服务商。
+# 只有对话 API(DeepSeek 等)也够用:识别和朗读默认在这台 Mac 本地完成,不需要任何密钥。
+# 密钥建议放环境变量(api_key_env),也可以直接写 api_key = "sk-..."。
+# ---------------------------------------------------------------------------
 [llm]
-provider = "anthropic"     # 读取环境变量 ANTHROPIC_API_KEY 或 `ant auth login` 的登录
-model = "claude-opus-5-5"
-effort = "low"             # 语音问答默认 low(更快);想要更周到改 medium / high
-# 访问不了 Anthropic 时可以换成国内兼容 OpenAI 接口的模型,例如:
-# provider = "openai_compatible"
-# base_url = "https://api.deepseek.com/v1"
-# model = "deepseek-chat"
-# api_key_env = "DEEPSEEK_API_KEY"
+provider = "openai_compatible"         # 任何兼容 OpenAI 的 /chat/completions
+base_url = "https://api.deepseek.com/v1"
+model = "deepseek-chat"
+api_key_env = "DEEPSEEK_API_KEY"       # export DEEPSEEK_API_KEY=sk-...
+#
+# 其他兼容 OpenAI 的服务:改 base_url / model / 密钥即可,例如
+#   base_url = "https://api.siliconflow.cn/v1"   model = "deepseek-ai/DeepSeek-V3"
+#   base_url = "https://你的服务商地址/v1"        model = "服务商文档里的模型名"
+#
+# 完全本地(不联外网):装 Ollama 后 `ollama pull qwen2.5:7b`,然后
+#   base_url = "http://localhost:11434/v1"   model = "qwen2.5:7b"   不用填密钥
+# LM Studio 默认地址是 http://localhost:1234/v1
+#
+# 用 Claude:
+#   provider = "anthropic"   model = "claude-opus-5-5"   effort = "low"
+#   读取环境变量 ANTHROPIC_API_KEY 或 `ant auth login` 的登录
 
 [asr]
 provider = "mlx_whisper"   # Apple 芯片本地识别,免费;首次会下载模型
 # model = "mlx-community/whisper-large-v3-turbo"
-# provider = "faster_whisper"   # Intel Mac / Linux
-# provider = "openai"           # 云端识别,需要 api_key_env
+# provider = "faster_whisper"   # Intel Mac / Linux 本地识别
+#
+# 云端识别(任何兼容 OpenAI 的 /audio/transcriptions):
+# provider = "openai"
+# base_url = "https://api.siliconflow.cn/v1"
+# model = "FunAudioLLM/SenseVoiceSmall"
+# api_key_env = "SILICONFLOW_API_KEY"
 
 [tts]
-provider = "say"           # macOS 自带朗读
+provider = "say"           # macOS 自带朗读,免费
 voice = "Tingting"         # 系统设置 > 辅助功能 > 朗读内容 里可下载更好听的中文声音
+#
+# 云端朗读(任何兼容 OpenAI 的 /audio/speech):
+# provider = "openai"
+# base_url = "https://api.siliconflow.cn/v1"
+# model = "FunAudioLLM/CosyVoice2-0.5B"
+# voice = "FunAudioLLM/CosyVoice2-0.5B:anna"
+# sample_rate = 16000      # 硅基流动可以指定;OpenAI 固定 24 kHz,不要写这一行
+# api_key_env = "SILICONFLOW_API_KEY"
 
 [home]                     # Home Assistant(可选)
 # url = "http://homeassistant.local:8123"

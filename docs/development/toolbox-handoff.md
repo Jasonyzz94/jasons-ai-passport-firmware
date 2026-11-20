@@ -44,6 +44,8 @@ The direct client shares one base URL and key across recognition, chat, and spee
 - Put custom endpoints and model IDs under advanced settings. Validate recognition, chat, and synthesis separately. Require HTTPS for cloud credentials and bind credentials to their provider and endpoint. Switching providers requires the corresponding credential. Support a deliberate clear action.
 - Verify the returned audio format and sample rate, adapting it to device playback as needed. Offer a short preview and keep the text answer visible when speech fails. Report authentication, timeouts, unavailable models, and audio failures at the affected stage.
 
+**Progress.** Done: the auto, relay-only, and direct-only modes; separate chat and voice endpoint/key pairs; DeepSeek + SiliconFlow, SiliconFlow, OpenAI, and custom presets; key clearing when the endpoint changes; 24 kHz speech resampling; stage-specific errors on the device and from the relay; connecting before recording. Remaining: a portal test button and voice preview, an HTTPS requirement for cloud keys, and device acceptance.
+
 **Acceptance.** Verify a short recording, a text reply, and voice playback in each supported mode. Check that an invalid key or wrong audio format produces a stage specific message. Check that changing the provider requires an explicit credential choice and that a synthesis failure still leaves the answer visible.
 
 ## Delivery

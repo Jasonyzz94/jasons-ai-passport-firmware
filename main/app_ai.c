@@ -4,6 +4,7 @@
 // 按键:按住 OK 说话(短按 = 重播上一条)· ▲▼ 翻看对话 · 长▼ 清空 · 长▲ 返回
 #include "apps.h"
 #include "icons.h"
+#include "voice_cfg.h"
 #include "settings.h"
 #include "svc.h"
 #include "ui.h"
@@ -99,9 +100,13 @@ static void dock_set(const char *text, uint32_t bg, uint32_t fg, bool meter)
 
 static void refresh_dock(ai_state_t st)
 {
-    const bool ready = relay_state() == SRV_OK
-                    || (net_state() == NET_CONNECTED && g_settings.api_key[0]);
+    const bool ready = voice_ready(g_settings.ai_mode, relay_state() == SRV_OK, g_settings.api_key[0] != '\0',
+                                   net_state() == NET_CONNECTED);
     switch (st) {
+    case AI_CONNECTING:
+        dock_set("连接中,听到提示音再说", ui_mix(C_AI, C_SURFACE, 70), C_TEXT, false);
+        shell_hints("▲:取消");
+        break;
     case AI_LISTENING:
         dock_set("松开发送", C_AI, C_BG, true);
         shell_hints("松开OK:发送|▲:取消");
@@ -123,7 +128,9 @@ static void refresh_dock(ai_state_t st)
             dock_set("按住确定键说话", C_SURFACE2, C_TEXT, false);
             shell_hints("按住OK:说话|▲▼:翻看|长▲:返回");
         } else {
-            dock_set(net_state() == NET_CONNECTED ? "设置›无线网络›高级设置 填密钥" : "正在联网…",
+            dock_set(net_state() != NET_CONNECTED ? "正在联网…"
+                     : g_settings.ai_mode == VOICE_MODE_RELAY ? "正在找 Mac 中转…"
+                     : "设置›无线网络›高级设置 填密钥",
                      C_SURFACE2, C_TEXT3, false);
             shell_hints("OK:重新查找|长▲:返回");
         }
@@ -172,15 +179,15 @@ static bool key(sys_key_t k, sys_key_ev_t ev)
     const ai_state_t st = ai_state();
     if (k == SYS_KEY_OK) {
         if (ev == SYS_EV_PRESS && (st == AI_IDLE || st == AI_ERROR)) {
-            if (relay_state() != SRV_OK && !g_settings.api_key[0]) {
+            if (!voice_ready(g_settings.ai_mode, relay_state() == SRV_OK, g_settings.api_key[0] != '\0',
+                             net_state() == NET_CONNECTED)) {
                 relay_discover();
                 return true;
             }
             s_press_ms = sys_now_ms();
-            if (ai_talk_begin()) {
+            if (ai_talk_begin()) {   // 提示音在真正开始录音时响(见 tick)
                 s_talking = true;
                 shell_keep_awake(true);
-                audio_beep(BEEP_START);
             }
             return true;
         }
@@ -226,11 +233,14 @@ static void tick(int64_t now)
     static srv_state_t last_srv = (srv_state_t)-1;
     const srv_state_t srv = relay_state();
     if (st != s_last_state || srv != last_srv) {
+        if (st == AI_LISTENING && s_last_state != AI_LISTENING) audio_beep(BEEP_START);
         if (s_last_state == AI_LISTENING && st != AI_LISTENING) shell_keep_awake(st != AI_IDLE);
         if (st == AI_IDLE || st == AI_ERROR) shell_keep_awake(false);
         refresh_dock(st);
-        lv_label_set_text(s_srv, srv == SRV_OK ? "服务器已连接"
-                                 : (g_settings.api_key[0] && net_state() == NET_CONNECTED ? "云端直连" : ""));
+        const bool net_ok = net_state() == NET_CONNECTED;
+        const bool direct = voice_use_direct(g_settings.ai_mode, srv == SRV_OK, g_settings.api_key[0] != '\0');
+        lv_label_set_text(s_srv, !net_ok ? "" : direct ? (g_settings.api_key[0] ? "云端直连" : "")
+                                 : srv == SRV_OK ? "Mac 中转" : "");
         s_last_state = st;
         last_srv = srv;
     }

@@ -21,12 +21,18 @@ typedef struct {
     char city[24];           // 天气城市名;空 = 按 IP 自动定位
     char lat[12];            // 纬度/经度(字符串保存,空 = 自动定位)
     char lon[12];
-    char api_base[80];       // 兼容 OpenAI 接口的云服务,例 https://api.siliconflow.cn/v1
-    char api_key[96];
+    int ai_mode;             // voice_mode_t:0 自动 / 1 只用 Mac 中转 / 2 只用云端直连
+    // 对话:兼容 OpenAI 的 /chat/completions,例 https://api.deepseek.com/v1
+    char api_base[80];
+    char api_key[168];       // OpenAI 的 sk-proj- 密钥较长
+    char llm_model[48];
+    // 语音:/audio/transcriptions 和 /audio/speech。接口留空 = 和对话同一家。
+    char voice_base[80];
+    char voice_key[168];     // 留空:语音接口和对话相同时沿用对话密钥
     char asr_model[48];      // 语音识别模型
-    char llm_model[48];      // 对话模型
     char tts_model[48];      // 语音合成模型
     char tts_voice[64];
+    int tts_rate;            // 朗读返回的 PCM 采样率:16000 / 24000;0 = 不朗读
     char ha_url[64];         // Home Assistant,例 http://192.168.1.5:8123
     char ha_token[200];
     char ha_entities[200];   // 逗号分隔的实体 ID

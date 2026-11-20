@@ -70,7 +70,10 @@ const char *net_portal_ssid(void);   // 例 "Passport-A3F2"
 typedef struct {
     bool valid;
     char ssid[33], pass[65], server[96];
-    char api_base[80], api_key[96], llm_model[48], asr_model[48], tts_model[48], tts_voice[64];
+    int ai_mode, tts_rate;   // -1 = 表单里没有这一项
+    bool clear_keys;         // 勾选了"清除已保存的密钥"
+    char api_base[80], api_key[168], llm_model[48];
+    char voice_base[80], voice_key[168], asr_model[48], tts_model[48], tts_voice[64];
     char city[24], lat[12], lon[12];
     char ha_url[64], ha_token[200], ha_entities[200];
     char ics_url[200];
@@ -234,6 +237,7 @@ typedef enum {
     AI_THINKING,
     AI_SPEAKING,
     AI_ERROR,
+    AI_CONNECTING,   // 云端直连:正在建立识别连接,连好后才开麦(否则开头的话会被丢掉)
 } ai_state_t;
 
 bool ai_talk_begin(void);

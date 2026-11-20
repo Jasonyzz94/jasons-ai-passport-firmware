@@ -4,6 +4,8 @@ Providers (config.toml):
   [asr] provider = "mlx_whisper" | "faster_whisper" | "openai"   (default mlx_whisper)
   [llm] provider = "anthropic" | "openai_compatible"              (default anthropic)
   [tts] provider = "say" | "openai" | "none"                       (default say, macOS built-in)
+"openai" / "openai_compatible" mean any OpenAI-compatible endpoint (DeepSeek, SiliconFlow,
+Ollama, LM Studio, ...). A failed step raises StageError, whose text the device shows.
 
 Audio in and out is 16 kHz mono 16-bit PCM; the device side is IMA ADPCM (adpcm.py).
 """
@@ -38,6 +40,29 @@ SYSTEM_PROMPT = (
     "听写结果可能有错别字或同音字,按最合理的意思理解。"
     "需要实时信息(新闻、股价等)而你不知道时,直接说明你无法获取最新信息。"
 )
+
+class StageError(Exception):
+    """某一步(识别 / 对话 / 朗读)失败。str() 是给设备屏幕看的短提示,例 "识别:密钥无效"。"""
+
+    def __init__(self, stage: str, reason: int | str) -> None:
+        self.stage = stage
+        self.reason = http_reason(reason) if isinstance(reason, int) else reason
+        super().__init__(f"{stage}:{self.reason}")
+
+
+def http_reason(status: int) -> str:
+    """HTTP 状态码 → 简短原因(与固件 voice_reason() 一致)。"""
+    named = {401: "密钥无效", 403: "密钥无效", 402: "余额不足", 404: "接口或模型不存在",
+             408: "超时", 504: "超时", 413: "录音太长", 429: "太频繁或额度用完"}
+    if status in named:
+        return named[status]
+    return "服务商出错" if status >= 500 else "请求被拒"
+
+
+def auth_headers(api_key: str) -> dict[str, str]:
+    # 本地 Ollama / LM Studio 不需要密钥:不填就不发
+    return {"Authorization": f"Bearer {api_key}"} if api_key else {}
+
 
 CONVERSATION_IDLE_SECONDS = 600   # 超过 10 分钟没说话就开始新对话
 CONVERSATION_MAX_TURNS = 8        # 达到后开始新对话(只追加、不截断历史)
@@ -91,12 +116,25 @@ class ASR:
                 form.add_field("model", self.model or "whisper-1")
                 form.add_field("language", "zh")
                 form.add_field("file", path.read_bytes(), filename="in.wav", content_type="audio/wav")
-                async with session.post(f"{self.base_url}/audio/transcriptions", data=form,
-                                        headers={"Authorization": f"Bearer {self.api_key}"},
-                                        timeout=aiohttp.ClientTimeout(total=30)) as r:
-                    r.raise_for_status()
-                    return str((await r.json()).get("text", "")).strip()
-            return await asyncio.get_running_loop().run_in_executor(None, self._transcribe_local, path)
+                try:
+                    async with session.post(f"{self.base_url}/audio/transcriptions", data=form,
+                                            headers=auth_headers(self.api_key),
+                                            timeout=aiohttp.ClientTimeout(total=30)) as r:
+                        if r.status != 200:
+                            log.warning("asr error %s: %s", r.status, (await r.text())[:300])
+                            raise StageError("识别", r.status)
+                        return str((await r.json()).get("text", "")).strip()
+                except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                    log.warning("asr request failed: %r", exc)
+                    raise StageError("识别", "网络不通") from exc
+            try:
+                return await asyncio.get_running_loop().run_in_executor(None, self._transcribe_local, path)
+            except ImportError as exc:
+                log.warning("asr provider %s not installed: %s", self.provider, exc)
+                raise StageError("识别", "本地模型没装") from exc
+            except Exception as exc:  # 本地模型的错误类型各不相同
+                log.exception("local asr failed")
+                raise StageError("识别", "本地模型出错") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -182,16 +220,32 @@ class LLM:
             if isinstance(content, list):
                 content = "".join(b.get("text", "") for b in content if b.get("type") == "text")
             msgs.append({"role": m["role"], "content": content})
-        async with session.post(f"{self.base_url}/chat/completions",
-                                headers={"Authorization": f"Bearer {self.api_key}"},
-                                json={"model": self.model, "messages": msgs, "max_tokens": 800},
-                                timeout=aiohttp.ClientTimeout(total=60)) as r:
-            if r.status != 200:
-                log.warning("llm error %s: %s", r.status, await r.text())
-                self._rollback(conv)
-                return "大模型出错了,稍后再试。"
-            data = await r.json()
-        text = data["choices"][0]["message"]["content"].strip()
+        if not self.base_url or not self.model:
+            self._rollback(conv)
+            raise StageError("对话", "没配置接口或模型")
+        try:
+            async with session.post(f"{self.base_url}/chat/completions",
+                                    headers=auth_headers(self.api_key),
+                                    json={"model": self.model, "messages": msgs, "max_tokens": 800,
+                                          "stream": False},
+                                    timeout=aiohttp.ClientTimeout(total=60)) as r:
+                if r.status != 200:
+                    log.warning("llm error %s: %s", r.status, (await r.text())[:300])
+                    self._rollback(conv)
+                    raise StageError("对话", r.status)
+                data = await r.json()
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            log.warning("llm request failed: %r", exc)
+            self._rollback(conv)
+            raise StageError("对话", "网络不通") from exc
+        try:
+            text = str(data["choices"][0]["message"]["content"] or "").strip()
+        except (KeyError, IndexError, TypeError):
+            text = ""
+        if not text:
+            log.warning("llm reply has no text: %s", str(data)[:300])
+            self._rollback(conv)
+            raise StageError("对话", "回复异常")
         conv.messages.append({"role": "assistant", "content": text})
         return text
 
@@ -234,6 +288,9 @@ class TTS:
         self.model = cfg.get("model", "gpt-4o-mini-tts")
         self.base_url = cfg.get("base_url", "https://api.openai.com/v1").rstrip("/")
         self.api_key = cfg.get("api_key") or os.environ.get(cfg.get("api_key_env", "OPENAI_API_KEY"), "")
+        # 返回 PCM 的采样率。OpenAI 固定 24000、不认这个参数;
+        # 硅基流动等支持指定(写了就随请求发送)。
+        self.sample_rate = int(cfg.get("sample_rate", 0)) or None
 
     def _say(self, text: str) -> list[int]:
         with tempfile.TemporaryDirectory() as tmp:
@@ -250,14 +307,24 @@ class TTS:
         if not text or self.provider == "none":
             return []
         if self.provider == "openai":
-            async with session.post(f"{self.base_url}/audio/speech",
-                                    headers={"Authorization": f"Bearer {self.api_key}"},
-                                    json={"model": self.model, "voice": self.voice, "input": text,
-                                          "response_format": "pcm"},
-                                    timeout=aiohttp.ClientTimeout(total=60)) as r:
-                r.raise_for_status()
-                return resample(adpcm.bytes_to_pcm(await r.read()), 24000)
-        return await asyncio.get_running_loop().run_in_executor(None, self._say, text)
+            body: dict[str, Any] = {"model": self.model, "voice": self.voice, "input": text,
+                                    "response_format": "pcm"}
+            if self.sample_rate:
+                body["sample_rate"] = self.sample_rate
+            try:
+                async with session.post(f"{self.base_url}/audio/speech", headers=auth_headers(self.api_key),
+                                        json=body, timeout=aiohttp.ClientTimeout(total=60)) as r:
+                    if r.status != 200:
+                        log.warning("tts error %s: %s", r.status, (await r.text())[:300])
+                        raise StageError("朗读", r.status)
+                    data = await r.read()
+            except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                raise StageError("朗读", "网络不通") from exc
+            return resample(adpcm.bytes_to_pcm(data[: len(data) // 2 * 2]), self.sample_rate or 24000)
+        try:
+            return await asyncio.get_running_loop().run_in_executor(None, self._say, text)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise StageError("朗读", "本地朗读出错") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -289,13 +356,18 @@ class Assistant:
         answer = await self.llm.answer(device, question, session)
         t2 = time.time()
         audio_id = ""
+        tts_error = ""
         try:
             speech = await self.tts.synthesize(answer, session)
             if speech:
                 audio_id = f"{device}-{int(time.time() * 1000)}"
                 self._store(audio_id, b"".join(adpcm.encode_stream(speech)))
-        except (OSError, subprocess.SubprocessError, aiohttp.ClientError) as exc:
+        except StageError as exc:   # 朗读失败不影响文字回复
             log.warning("tts failed: %s", exc)
+            tts_error = str(exc)
         log.info("asr %.1fs llm %.1fs tts %.1fs | %s -> %s", t1 - t0, t2 - t1, time.time() - t2,
                  question, answer[:40])
-        return {"question": question, "answer": answer, "audio": audio_id}
+        result: dict[str, Any] = {"question": question, "answer": answer, "audio": audio_id}
+        if tts_error:
+            result["tts_error"] = tts_error
+        return result

@@ -25,7 +25,7 @@ import aiohttp
 from aiohttp import web
 
 from . import board
-from .assistant import ASR, LLM, TTS, Assistant
+from .assistant import ASR, LLM, TTS, Assistant, StageError
 from .config import Config
 from .home import Home
 from .weather import Weather
@@ -134,7 +134,10 @@ async def talk(request: web.Request) -> web.Response:
         data.extend(chunk)
         if len(data) > MAX_AUDIO_BYTES:
             raise web.HTTPRequestEntityTooLarge(max_size=MAX_AUDIO_BYTES, actual_size=len(data))
-    result = await request.app["assistant"].talk(request["device"], bytes(data), request.app["http"])
+    try:
+        result = await request.app["assistant"].talk(request["device"], bytes(data), request.app["http"])
+    except StageError as exc:   # 告诉设备是哪一步、为什么失败
+        return web.json_response({"error": str(exc)}, status=502)
     if result is None:
         raise web.HTTPUnprocessableEntity(text="no speech")
     return web.json_response(result)

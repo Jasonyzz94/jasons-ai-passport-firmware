@@ -24,8 +24,18 @@ fi
 
 [[ -f "${here}/config.toml" ]] || cp "${here}/config.example.toml" "${here}/config.toml"
 
-# launchd 不继承终端环境变量:把 Claude 密钥写进 plist(仅本机可读)。
-key="${ANTHROPIC_API_KEY:-}"
+# launchd 不继承终端环境变量:把已 export 的密钥写进 plist(仅本机可读)。
+# config.toml 里 api_key_env 用到的变量名要在这个列表里。
+key_vars=(ANTHROPIC_API_KEY DEEPSEEK_API_KEY SILICONFLOW_API_KEY OPENAI_API_KEY LLM_API_KEY)
+env_xml=""
+found=""
+for v in "${key_vars[@]}"; do
+    val="${!v:-}"
+    [[ -n "${val}" ]] || continue
+    [[ "${val}" =~ ^[A-Za-z0-9._:/+=-]+$ ]] || { echo "${v} 含有不支持的字符,请检查后重试"; exit 1; }
+    env_xml+="    <key>${v}</key><string>${val}</string>"$'\n'
+    found+=" ${v}"
+done
 mkdir -p "$(dirname "${plist}")"
 cat > "${plist}" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -38,8 +48,7 @@ cat > "${plist}" <<PLIST
   </array>
   <key>WorkingDirectory</key><string>${here}</string>
   <key>EnvironmentVariables</key><dict>
-    <key>ANTHROPIC_API_KEY</key><string>${key}</string>
-    <key>PATH</key><string>/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
+${env_xml}    <key>PATH</key><string>/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
@@ -52,5 +61,10 @@ chmod 600 "${plist}"
 launchctl bootout "gui/$(id -u)/${label}" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "${plist}"
 echo "已启动。日志:~/.passport-server/server.log"
-[[ -n "${key}" ]] || echo "提示:没检测到 ANTHROPIC_API_KEY;先 export 后重新运行本脚本,或在 config.toml 里换用其他模型。"
+if [[ -n "${found}" ]]; then
+    echo "已写入密钥变量:${found}"
+else
+    echo "提示:没检测到密钥变量(${key_vars[*]})。先 export,例如 export DEEPSEEK_API_KEY=sk-...,再重新运行本脚本;"
+    echo "      或者在 config.toml 里直接写 api_key,或用本地 Ollama。"
+fi
 echo "首次启动 macOS 可能询问是否允许 Python 接受网络连接,请选择允许。"

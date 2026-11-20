@@ -64,6 +64,18 @@ and acceptance status; hardware limits are in the
   lat-lon / IP lookup → Open-Meteo), info board (local cards), smart home (LAN Home
   Assistant) and the voice assistant (an OpenAI-compatible cloud, SiliconFlow by
   default).
+- The voice assistant mode is selectable: automatic, Mac relay only, or direct cloud
+  only. Direct cloud has separate endpoint/key pairs for chat and for voice
+  (recognition and speech). An empty voice endpoint means the chat one; an empty voice
+  key reuses the chat key only when both endpoints match. Setup page presets: DeepSeek
+  chat + SiliconFlow voice, SiliconFlow for everything, OpenAI for everything (speech
+  resampled from 24 kHz), custom. Changing an endpoint without entering a new key
+  clears the old key.
+- Direct recognition opens the HTTPS connection before it starts the microphone and
+  beeps when recording starts; the dock shows "connecting" meanwhile.
+- Errors name the step and the reason, such as "recognition: invalid key", "chat: out
+  of credit", or "speech: network down"; a speech failure keeps the text answer. In
+  relay mode the relay returns the same text in `error` / `tts_error`.
 - Setup page: pops up automatically when a phone joins the device hotspot; status card,
   nearby networks, weather location (built-in city coordinates), assistant key and
   models, Home Assistant, relay address; it shows the connection result live. Leaving
@@ -77,6 +89,8 @@ and acceptance status; hardware limits are in the
   heap and the largest block on the serial console.
 - The direct cloud voice upload format (chunked multipart WAV) and speech parameters
   follow the provider documentation but have not been exercised against the real API.
+  Direct recognition waits for the HTTPS handshake before recording, so each utterance
+  starts after a one- to two-second delay.
 
 ## Acceptance status
 

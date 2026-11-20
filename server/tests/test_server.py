@@ -20,7 +20,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from passport_server import adpcm, board, discovery, weather  # noqa: E402
 from passport_server.app import create_app  # noqa: E402
-from passport_server.assistant import LLM, Conversation, resample, speakable  # noqa: E402
+from passport_server.assistant import (LLM, TTS, Conversation, StageError, http_reason,  # noqa: E402
+                                       resample, speakable)
 from passport_server.config import Config  # noqa: E402
 from passport_server.home import item_from_state  # noqa: E402
 
@@ -172,6 +173,108 @@ class LLMTest(unittest.TestCase):
         self.assertIsInstance(llm._conversation("d"), Conversation)
 
 
+class FakeResponse:
+    def __init__(self, status: int, payload: object = None, body: bytes = b"") -> None:
+        self.status = status
+        self._payload = payload
+        self._body = body
+
+    async def __aenter__(self) -> "FakeResponse":
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+    async def json(self) -> object:
+        return self._payload
+
+    async def text(self) -> str:
+        return str(self._payload)
+
+    async def read(self) -> bytes:
+        return self._body
+
+
+class FakeSession:
+    """记录请求、返回预设响应的 aiohttp.ClientSession 替身。"""
+
+    def __init__(self, resp: FakeResponse) -> None:
+        self.resp = resp
+        self.calls: list[tuple[str, dict]] = []
+
+    def post(self, url: str, **kwargs: object) -> FakeResponse:
+        self.calls.append((url, kwargs))
+        return self.resp
+
+
+class OpenAICompatibleTest(unittest.TestCase):
+    def _llm(self, **cfg: str) -> LLM:
+        base = {"provider": "openai_compatible", "base_url": "https://api.deepseek.com/v1",
+                "model": "deepseek-chat", "api_key": "sk-test"}
+        base.update(cfg)
+        return LLM(base)
+
+    def test_deepseek_request_and_history(self) -> None:
+        llm = self._llm()
+        session = FakeSession(FakeResponse(200, {"choices": [{"message": {"content": " 晴。 "}}]}))
+        self.assertEqual(asyncio.run(llm.answer("d", "天气", session)), "晴。")
+        url, kw = session.calls[0]
+        self.assertEqual(url, "https://api.deepseek.com/v1/chat/completions")
+        self.assertEqual(kw["headers"], {"Authorization": "Bearer sk-test"})
+        self.assertEqual(kw["json"]["model"], "deepseek-chat")
+        self.assertEqual([m["role"] for m in llm._convs["d"].messages], ["user", "assistant"])
+
+    def test_error_names_stage_and_reason_and_rolls_back(self) -> None:
+        llm = self._llm()
+        for status, reason in ((401, "密钥无效"), (402, "余额不足"), (404, "接口或模型不存在"), (503, "服务商出错")):
+            session = FakeSession(FakeResponse(status, {"error": "x"}))
+            with self.assertRaises(StageError) as ctx:
+                asyncio.run(llm.answer("d", "q", session))
+            self.assertEqual(str(ctx.exception), f"对话:{reason}")
+            self.assertEqual(llm._convs["d"].messages, [])
+
+    def test_local_ollama_sends_no_key(self) -> None:
+        llm = self._llm(base_url="http://localhost:11434/v1", model="qwen2.5:7b", api_key="")
+        session = FakeSession(FakeResponse(200, {"choices": [{"message": {"content": "好"}}]}))
+        asyncio.run(llm.answer("d", "q", session))
+        self.assertEqual(session.calls[0][1]["headers"], {})
+
+    def test_missing_config(self) -> None:
+        with self.assertRaises(StageError) as ctx:
+            asyncio.run(self._llm(base_url="").answer("d", "q", FakeSession(FakeResponse(200))))
+        self.assertEqual(str(ctx.exception), "对话:没配置接口或模型")
+
+    def test_http_reason_matches_firmware_table(self) -> None:
+        self.assertEqual(http_reason(403), "密钥无效")
+        self.assertEqual(http_reason(429), "太频繁或额度用完")
+        self.assertEqual(http_reason(400), "请求被拒")
+
+
+class CloudTTSTest(unittest.TestCase):
+    def test_openai_pcm_24k_is_resampled(self) -> None:
+        tts = TTS({"provider": "openai", "api_key": "k"})
+        pcm = adpcm.pcm_to_bytes([1000] * 2400)
+        session = FakeSession(FakeResponse(200, body=pcm))
+        out = asyncio.run(tts.synthesize("你好", session))
+        self.assertEqual(len(out), 1600)
+        self.assertNotIn("sample_rate", session.calls[0][1]["json"])
+
+    def test_siliconflow_asks_for_16k(self) -> None:
+        tts = TTS({"provider": "openai", "api_key": "k", "base_url": "https://api.siliconflow.cn/v1",
+                   "model": "FunAudioLLM/CosyVoice2-0.5B", "voice": "FunAudioLLM/CosyVoice2-0.5B:anna",
+                   "sample_rate": 16000})
+        session = FakeSession(FakeResponse(200, body=adpcm.pcm_to_bytes([5] * 1600) + b"\x01"))
+        out = asyncio.run(tts.synthesize("你好", session))
+        self.assertEqual(len(out), 1600)   # 不重采样;多出的半个样本被丢掉
+        self.assertEqual(session.calls[0][1]["json"]["sample_rate"], 16000)
+
+    def test_error_is_stage_error(self) -> None:
+        tts = TTS({"provider": "openai", "api_key": "bad"})
+        with self.assertRaises(StageError) as ctx:
+            asyncio.run(tts.synthesize("你好", FakeSession(FakeResponse(401, {"error": "x"}))))
+        self.assertEqual(str(ctx.exception), "朗读:密钥无效")
+
+
 class ApiTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -182,6 +285,7 @@ class ApiTest(unittest.IsolatedAsyncioTestCase):
         asst.llm.answer = mock.AsyncMock(return_value="晴,二十度。")
         asst.tts.synthesize = mock.AsyncMock(return_value=tone(1000))
         app["weather"].get = mock.AsyncMock(return_value={"city": "上海"})
+        self.app = app
         self.client = TestClient(TestServer(app))
         await self.client.start_server()
 
@@ -212,6 +316,24 @@ class ApiTest(unittest.IsolatedAsyncioTestCase):
         data = await r.read()
         self.assertGreater(len(data), 0)
         self.assertEqual(len(adpcm.decode_stream(data)), 1000)
+
+    async def test_stage_errors_reach_device(self) -> None:
+        r = await self.client.post("/api/pair", json={"device": "C1", "name": "x"})
+        auth = {"Authorization": f"Bearer {(await r.json())['token']}"}
+        audio = b"".join(adpcm.encode_stream(tone(16000)))
+        asst = self.app["assistant"]
+        # 对话失败:502 + 哪一步、为什么
+        asst.llm.answer = mock.AsyncMock(side_effect=StageError("对话", 402))
+        r = await self.client.post("/api/assistant/talk", headers=auth, data=audio)
+        self.assertEqual(r.status, 502)
+        self.assertEqual((await r.json())["error"], "对话:余额不足")
+        # 朗读失败:文字照常返回,另带 tts_error
+        asst.llm.answer = mock.AsyncMock(return_value="晴。")
+        asst.tts.synthesize = mock.AsyncMock(side_effect=StageError("朗读", "网络不通"))
+        body = await (await self.client.post("/api/assistant/talk", headers=auth, data=audio)).json()
+        self.assertEqual(body["answer"], "晴。")
+        self.assertEqual(body["audio"], "")
+        self.assertEqual(body["tts_error"], "朗读:网络不通")
 
     async def test_token_persisted(self) -> None:
         await self.client.post("/api/pair", json={"device": "B1", "name": "x"})

@@ -6,6 +6,7 @@
 #include "settings.h"
 #include "svc.h"
 #include "sys.h"
+#include "voice_cfg.h"
 
 #include "esp_event.h"
 #include "esp_http_server.h"
@@ -251,7 +252,7 @@ static const char k_css[] =   // glyph-check: ignore
     "body{font-family:-apple-system,system-ui,sans-serif;background:#0b0e14;color:#f1f4f9;margin:0;padding:16px}"
     "h1{font-size:22px;margin:6px 0 2px}.sub{color:#667185;font-size:13px;margin-bottom:12px}"
     ".card{background:#151a23;border:1px solid #2a3241;border-radius:16px;padding:14px;margin:12px 0}"
-    ".card h2{font-size:16px;margin:0 0 8px}.row{display:flex;justify-content:space-between;padding:4px 0;"
+    ".card h2{font-size:16px;margin:0 0 8px}.card h3{font-size:14px;margin:14px 0 4px}.row{display:flex;justify-content:space-between;padding:4px 0;"
     "font-size:14px}.k{color:#a3adbd}.ok{color:#34d399}.warn{color:#fbbf24}"
     "label{display:block;margin:10px 0 6px;color:#a3adbd;font-size:13px}"
     "input,select{width:100%;box-sizing:border-box;padding:12px;border-radius:10px;border:1px solid #2a3241;"
@@ -290,9 +291,17 @@ static const char k_script[] =   // glyph-check: ignore
     "$('[name=city]').focus()}else{const c=v.split(',');$('[name=city]').value=c[0];$('[name=lat]').value=c[1];"
     "$('[name=lon]').value=c[2]}};"
     "$('[name=city]').oninput=()=>{$('[name=lat]').value='';$('[name=lon]').value='';sel.value='typed'};"
-    "$('#prov').onchange=()=>{if($('#prov').value=='sf'){$('[name=api_base]').value='https://api.siliconflow.cn/v1';"
-    "$('[name=llm_model]').value='deepseek-ai/DeepSeek-V3';$('[name=asr_model]').value='FunAudioLLM/SenseVoiceSmall';"
-    "$('[name=tts_model]').value='FunAudioLLM/CosyVoice2-0.5B';$('[name=tts_voice]').value='FunAudioLLM/CosyVoice2-0.5B:anna'}};"
+    "const P={dssf:['https://api.deepseek.com/v1','deepseek-chat','https://api.siliconflow.cn/v1',"
+    "'FunAudioLLM/SenseVoiceSmall','FunAudioLLM/CosyVoice2-0.5B','FunAudioLLM/CosyVoice2-0.5B:anna',16000,"
+    "'对话密钥填 DeepSeek 的,语音密钥填硅基流动的。'],"
+    "sf:['https://api.siliconflow.cn/v1','deepseek-ai/DeepSeek-V3','','FunAudioLLM/SenseVoiceSmall',"
+    "'FunAudioLLM/CosyVoice2-0.5B','FunAudioLLM/CosyVoice2-0.5B:anna',16000,'只填对话密钥,语音沿用它。'],"
+    "oa:['https://api.openai.com/v1','gpt-4o-mini','','whisper-1','gpt-4o-mini-tts','alloy',24000,"
+    "'只填对话密钥,语音沿用它。']};"
+    "const F=['api_base','llm_model','voice_base','asr_model','tts_model','tts_voice','tts_rate'];"
+    "$('#prov').onchange=()=>{const p=P[$('#prov').value];"
+    "if(!p){$('#provtip').textContent=$('#prov').value=='custom'?'按服务商文档填写;服务商没有识别或朗读接口时,语音接口另填一家。':'';return}"
+    "F.forEach((k,i)=>$('[name='+k+']').value=p[i]);$('#provtip').textContent=p[7]};"
     "const msg=(t,c)=>{const m=$('#msg');m.style.display='block';m.style.background=c;m.textContent=t;"
     "m.scrollIntoView({behavior:'smooth'})};"
     "$('#f').onsubmit=async e=>{e.preventDefault();msg('正在保存…','#1e2531');"
@@ -374,8 +383,16 @@ static esp_err_t page_get(httpd_req_t *req)
     snprintf(buf, sizeof(buf), "%s%s", g_settings.city[0] ? g_settings.city : "按网络自动定位",  // glyph-check: ignore
              g_settings.lat[0] ? "(经纬度已填)" : "");  // glyph-check: ignore
     status_row(req, "天气位置", buf, "s");  // glyph-check: ignore
-    status_row(req, "语音助手密钥", g_settings.api_key[0] ? "已保存" : "未设置",  // glyph-check: ignore
-               g_settings.api_key[0] ? "ok" : "warn");
+    {
+        static const char *const modes[] = {"自动", "只用 Mac 中转", "只用云端直连"};  // glyph-check: ignore
+        const char *base, *key;
+        voice_resolve(g_settings.api_base, g_settings.api_key, g_settings.voice_base, g_settings.voice_key,
+                      &base, &key);
+        snprintf(buf, sizeof(buf), "%s · 对话密钥%s · 语音%s", modes[g_settings.ai_mode],  // glyph-check: ignore
+                 g_settings.api_key[0] ? "已保存" : "未设置",  // glyph-check: ignore
+                 !g_settings.voice_base[0] ? "同对话" : key[0] ? "密钥已保存" : "缺密钥");  // glyph-check: ignore
+        status_row(req, "语音助手", buf, g_settings.api_key[0] && key[0] ? "ok" : "warn");  // glyph-check: ignore
+    }
     status_row(req, "家庭助手", g_settings.ha_url[0] ? g_settings.ha_url : "未设置", "s");  // glyph-check: ignore
     chunk(req, "</div><div id=msg></div><form id=f method=post action=/save>");
 
@@ -438,19 +455,50 @@ static esp_err_t page_get(httpd_req_t *req)
     field(req, "经度", "lon", g_settings.lon, false, "例:121.47");  // glyph-check: ignore
     chunk(req, "</details></div>");
 
-    // 语音助手
-    chunk(req, "<div class=card><h2>语音助手(云端)</h2><p>没有家里的服务器时,设备直接调用云端完成 识别 → 对话 → 朗读。"  // glyph-check: ignore
-              "硅基流动在国内可直连,注册后在控制台创建密钥即可。</p>"  // glyph-check: ignore
-              "<select id=prov><option value=keep>保持当前接口</option><option value=sf>硅基流动(推荐)</option>"  // glyph-check: ignore
-              "<option value=custom>其他兼容 OpenAI 的接口</option></select>");  // glyph-check: ignore
-    field(req, "API 密钥", "api_key", g_settings.api_key, true, "sk-...");
-    chunk(req, "<details><summary>接口与模型</summary>");  // glyph-check: ignore
-    field(req, "接口地址", "api_base", g_settings.api_base, false, NULL);  // glyph-check: ignore
-    field(req, "对话模型", "llm_model", g_settings.llm_model, false, NULL);  // glyph-check: ignore
+    // 语音助手:选通道,再按服务商预设填对话和语音两组接口
+    chunk(req, "<div class=card><h2>语音助手</h2><p>语音助手要三步:识别(语音转文字)、对话、朗读。"  // glyph-check: ignore
+              "DeepSeek 这类只提供对话的服务,需要另配一家做识别和朗读,或者交给家里的 Mac 中转在本地完成。</p>");  // glyph-check: ignore
+    {
+        char sel[700];
+        const int m = g_settings.ai_mode;
+        snprintf(sel, sizeof(sel),
+                 "<label>使用方式</label><select name=ai_mode>"  // glyph-check: ignore
+                 "<option value=0%s>自动:找得到 Mac 中转就用中转,否则云端直连</option>"  // glyph-check: ignore
+                 "<option value=1%s>只用 Mac 中转(识别和朗读在 Mac 本地)</option>"  // glyph-check: ignore
+                 "<option value=2%s>只用云端直连</option></select>",  // glyph-check: ignore
+                 m == 0 ? " selected" : "", m == 1 ? " selected" : "", m == 2 ? " selected" : "");
+        chunk(req, sel);
+    }
+    chunk(req, "<label>云端服务商</label><select id=prov><option value=keep>保持当前设置</option>"  // glyph-check: ignore
+              "<option value=dssf>DeepSeek 对话 + 硅基流动语音(两个密钥)</option>"  // glyph-check: ignore
+              "<option value=sf>硅基流动全包(一个密钥)</option>"  // glyph-check: ignore
+              "<option value=oa>OpenAI 全包(一个密钥)</option>"  // glyph-check: ignore
+              "<option value=custom>自定义兼容 OpenAI 的接口</option></select>"  // glyph-check: ignore
+              "<p id=provtip></p><h3>对话</h3>");  // glyph-check: ignore
+    field(req, "对话密钥", "api_key", g_settings.api_key, true, "sk-...");  // glyph-check: ignore
+    field(req, "对话接口地址", "api_base", g_settings.api_base, false, "https://api.deepseek.com/v1");  // glyph-check: ignore
+    field(req, "对话模型", "llm_model", g_settings.llm_model, false, "deepseek-chat");  // glyph-check: ignore
+    chunk(req, "<h3>识别与朗读</h3><p>接口留空表示和对话用同一家、同一个密钥。</p>");  // glyph-check: ignore
+    field(req, "语音密钥", "voice_key", g_settings.voice_key, true, "留空 = 同对话密钥");  // glyph-check: ignore
+    field(req, "语音接口地址", "voice_base", g_settings.voice_base, false, "留空 = 同对话接口");  // glyph-check: ignore
     field(req, "识别模型", "asr_model", g_settings.asr_model, false, NULL);  // glyph-check: ignore
     field(req, "朗读模型", "tts_model", g_settings.tts_model, false, NULL);  // glyph-check: ignore
     field(req, "朗读声音", "tts_voice", g_settings.tts_voice, false, NULL);  // glyph-check: ignore
-    chunk(req, "</details><p>注意:密钥保存在设备里,请勿把设备借给不信任的人。</p></div>");  // glyph-check: ignore
+    {
+        char sel[420];
+        const int r = g_settings.tts_rate;
+        snprintf(sel, sizeof(sel),
+                 "<label>朗读音频格式</label><select name=tts_rate>"  // glyph-check: ignore
+                 "<option value=16000%s>16 kHz PCM(硅基流动等)</option>"  // glyph-check: ignore
+                 "<option value=24000%s>24 kHz PCM(OpenAI)</option>"  // glyph-check: ignore
+                 "<option value=0%s>不朗读,只显示文字</option></select>",  // glyph-check: ignore
+                 r == VOICE_TTS_16K ? " selected" : "", r == VOICE_TTS_24K ? " selected" : "",
+                 r == VOICE_TTS_OFF ? " selected" : "");
+        chunk(req, sel);
+    }
+    chunk(req, "<label style='display:flex;gap:8px;align-items:center'><input type=checkbox name=clr_keys value=1"
+              " style='width:auto;margin:0'>清除已保存的对话和语音密钥</label>"  // glyph-check: ignore
+              "<p>换了接口地址却没填新密钥时,旧密钥会自动清除,不会发给别家。密钥保存在设备里,请勿把设备借给不信任的人。</p></div>");  // glyph-check: ignore
 
     // 家庭助手 + 服务器
     chunk(req, "<div class=card><h2>家庭助手(可选)</h2><p>长期访问令牌在 Home Assistant 的个人资料页底部创建;实体用逗号分隔。</p>");  // glyph-check: ignore
@@ -567,10 +615,14 @@ static void form_field(const char *body, const char *key, char *out, size_t len)
 
 static esp_err_t page_save(httpd_req_t *req)
 {
-    enum { BODY_MAX = 1800 };
+    enum { BODY_MAX = 3072 };
+    if (req->content_len >= BODY_MAX) {   // 截断会悄悄丢掉后面的字段:直接拒绝
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "form too large");
+        return ESP_FAIL;
+    }
     char *body = malloc(BODY_MAX);
     if (!body) return ESP_FAIL;
-    const int n = req->content_len < BODY_MAX - 1 ? req->content_len : BODY_MAX - 1;
+    const int n = req->content_len;
     int got = 0;
     while (got < n) {
         const int r = httpd_req_recv(req, body + got, n - got);
@@ -586,8 +638,17 @@ static esp_err_t page_save(httpd_req_t *req)
     form_field(body, "ssid", s_form.ssid, sizeof(s_form.ssid));
     form_field(body, "pass", s_form.pass, sizeof(s_form.pass));
     form_field(body, "server", s_form.server, sizeof(s_form.server));
+    char num[8];
+    form_field(body, "ai_mode", num, sizeof(num));
+    s_form.ai_mode = num[0] ? atoi(num) : -1;
+    form_field(body, "tts_rate", num, sizeof(num));
+    s_form.tts_rate = num[0] ? atoi(num) : -1;
+    form_field(body, "clr_keys", num, sizeof(num));
+    s_form.clear_keys = num[0] == '1';
     form_field(body, "api_base", s_form.api_base, sizeof(s_form.api_base));
     form_field(body, "api_key", s_form.api_key, sizeof(s_form.api_key));
+    form_field(body, "voice_base", s_form.voice_base, sizeof(s_form.voice_base));
+    form_field(body, "voice_key", s_form.voice_key, sizeof(s_form.voice_key));
     form_field(body, "llm_model", s_form.llm_model, sizeof(s_form.llm_model));
     form_field(body, "asr_model", s_form.asr_model, sizeof(s_form.asr_model));
     form_field(body, "tts_model", s_form.tts_model, sizeof(s_form.tts_model));

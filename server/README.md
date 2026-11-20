@@ -14,9 +14,13 @@ APIs directly (see [application requirements](../docs/development/app-requiremen
 
 ```bash
 cd server
-export ANTHROPIC_API_KEY=...   # needed for Claude; see config.toml for other models
-./install-macos.sh            # creates a venv, installs dependencies, starts with launchd
+export DEEPSEEK_API_KEY=sk-...   # the default config chats through DeepSeek; see below for others
+./install-macos.sh              # creates a venv, installs dependencies, starts with launchd
 ```
+
+The installer copies any exported `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`,
+`SILICONFLOW_API_KEY`, `OPENAI_API_KEY` and `LLM_API_KEY` into the launchd job; rerun it
+after changing a key.
 
 - Configuration: `server/config.toml` (copied from `config.example.toml` on first run).
   Rerun the installer after editing it.
@@ -25,6 +29,26 @@ export ANTHROPIC_API_KEY=...   # needed for Claude; see config.toml for other mo
 - On first start macOS asks whether Python may accept incoming connections; allow it.
 - Other systems: `pip install -r requirements.txt`, then
   `python -m passport_server --config config.toml`.
+
+## Configure the voice assistant
+
+The assistant has three steps: recognition (speech to text), chat, and speech (text to
+speech). They map to `[asr]`, `[llm]` and `[tts]` in `config.toml`, and each step can use
+a different service.
+
+| What you have | `[llm]` | `[asr]` / `[tts]` |
+| --- | --- | --- |
+| Only DeepSeek or another OpenAI-compatible chat API | `provider = "openai_compatible"` with `base_url`, `model` and a key | Keep the defaults: local `mlx_whisper` and macOS `say`, free |
+| Nothing paid | Local Ollama: `base_url = "http://localhost:11434/v1"`, no key | Same as above |
+| A nicer voice | Any | `[tts] provider = "openai"` pointing at a provider with a speech endpoint, such as SiliconFlow |
+
+DeepSeek offers chat only, with no recognition or speech endpoint, so do not point
+`[asr]` / `[tts]` at it. When a step fails the device shows the step and the reason
+(for example "chat: out of credit"); details are in the server log.
+
+The device can also call the cloud directly, without this computer: on the device's
+setup page, pick a voice-assistant preset such as "DeepSeek chat + SiliconFlow voice"
+and enter both keys.
 
 ## How the device finds the server
 
@@ -48,7 +72,7 @@ page to skip broadcasting. The device's About page shows the latest discovery re
 | GET | `/api/weather` | same shape as the device's direct weather |
 | GET | `/api/board` | board cards (configure `[[board.cards]]`) |
 | GET / POST | `/api/home`, `/api/home/toggle` | Home Assistant bridge |
-| POST | `/api/assistant/talk` | body: IMA ADPCM blocks (chunked) → `{"question","answer","audio"}` |
+| POST | `/api/assistant/talk` | body: IMA ADPCM blocks (chunked) → `{"question","answer","audio"}`; adds `tts_error` when speech fails; 502 `{"error"}` when recognition or chat fails |
 | GET | `/api/assistant/audio/{id}` | speech audio as IMA ADPCM blocks |
 
 ## Tests
