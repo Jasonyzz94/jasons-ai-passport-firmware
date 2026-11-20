@@ -153,23 +153,36 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
 // ---------------------------------------------------------------------------
 // 射频启停
 // ---------------------------------------------------------------------------
+static int s_start_fails;   // Wi-Fi 启动连续失败次数(内存不足等),net_task 会定时重试
+
 static void wifi_start(wifi_mode_t mode)
 {
     if (!s_wifi_started) {
+        // 刚从遥控器退出时蓝牙还在后台关闭:等它把内存还回来再开 Wi-Fi(最多 3 秒)。
+        for (int i = 0; i < 30 && ble_radio_busy(); i++) vTaskDelay(pdMS_TO_TICKS(100));
         wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-        if (esp_wifi_init(&cfg) != ESP_OK) {
+        const esp_err_t ierr = esp_wifi_init(&cfg);
+        if (ierr != ESP_OK) {
+            s_start_fails++;
+            ESP_LOGW(TAG, "Wi-Fi 启动失败 %s(第 %d 次,空闲 %u,蓝牙%s)", esp_err_to_name(ierr),
+                     s_start_fails, (unsigned)sys_free_heap(), ble_radio_busy() ? "占用中" : "已关");
             s_state = NET_FAILED;
             return;
         }
         esp_wifi_set_storage(WIFI_STORAGE_RAM);
         esp_wifi_set_mode(mode);
         esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
-        if (esp_wifi_start() != ESP_OK) {
+        const esp_err_t serr = esp_wifi_start();
+        if (serr != ESP_OK) {
             esp_wifi_deinit();
+            s_start_fails++;
+            ESP_LOGW(TAG, "Wi-Fi 启动失败 %s(第 %d 次,空闲 %u)", esp_err_to_name(serr), s_start_fails,
+                     (unsigned)sys_free_heap());
             s_state = NET_FAILED;
             return;
         }
         s_wifi_started = true;
+        s_start_fails = 0;
     } else {
         esp_wifi_set_mode(mode);
     }
@@ -211,6 +224,7 @@ static void apply(void)
 {
     if (!wanted()) {
         wifi_stop();
+        s_start_fails = 0;
         return;
     }
     wifi_start(s_portal_on ? WIFI_MODE_APSTA : WIFI_MODE_STA);
@@ -697,6 +711,12 @@ static void net_task(void *arg)
             }
         }
         const int64_t now = sys_now_ms();
+        // 以前 Wi-Fi 启动失败一次就不再尝试,界面会一直显示"没有网络"。现在每 2 秒重试。
+        static int64_t start_retry_at;
+        if (wanted() && !s_wifi_started && s_start_fails > 0 && now >= start_retry_at) {
+            start_retry_at = now + 2000;
+            apply();
+        }
         if (retry_at && now >= retry_at) {
             retry_at = 0;
             s_retries = 0;
@@ -756,7 +776,12 @@ void net_release(void)
 
 net_state_t net_state(void)
 {
-    if (!s_wifi_started) return settings_has_wifi() ? NET_OFF : NET_NO_CONFIG;
+    if (!s_wifi_started) {
+        if (!settings_has_wifi()) return NET_NO_CONFIG;
+        // 有应用要用网但射频还没起来(等蓝牙释放 / 重试中):显示"正在连接",多次失败才算失败。
+        if (wanted()) return s_start_fails >= 8 ? NET_FAILED : NET_CONNECTING;
+        return NET_OFF;
+    }
     return s_state;
 }
 

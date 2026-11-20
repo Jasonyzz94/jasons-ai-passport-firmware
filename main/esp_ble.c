@@ -79,6 +79,10 @@ static QueueHandle_t s_act;
 static TaskHandle_t s_worker;
 static volatile ble_state_t s_state = BLE_OFF;
 static volatile bool s_running;
+static volatile bool s_stop_pending;   // 已请求关闭、hid 任务还没处理完
+
+// 蓝牙协议栈是否还占着射频 / 内存(运行中或正在关闭)。Wi-Fi 启动前会等它释放。
+bool ble_radio_busy(void) { return s_running || s_stop_pending || s_state == BLE_STARTING; }
 static struct ble_hs_adv_fields s_fields;
 static char s_name[24];
 
@@ -184,6 +188,7 @@ static void worker(void *arg)
         }
         if (a.type == ACT_STOP) {
             do_stop();
+            s_stop_pending = false;
             continue;
         }
         if (s_state != BLE_CONNECTED || !s_dev) {
@@ -335,8 +340,11 @@ static void do_stop(void)
         esp_hidd_dev_deinit(s_dev);
         s_dev = NULL;
     }
-    if (nimble_port_stop() == 0) nimble_port_deinit();
+    const int rc = nimble_port_stop();
+    if (rc == 0) nimble_port_deinit();
+    else ESP_LOGE(TAG, "蓝牙停止失败 %d,内存未释放", rc);
     s_state = BLE_OFF;
+    ESP_LOGI(TAG, "蓝牙已关闭:空闲 %u", (unsigned)sys_free_heap());
 }
 
 // 启停都交给 hid 任务异步执行:界面线程不等待 NimBLE 初始化 / 关闭。
@@ -359,7 +367,8 @@ void ble_hid_stop(void)
 {
     if (!s_act) return;
     act_t a = {.type = ACT_STOP};
-    xQueueSend(s_act, &a, pdMS_TO_TICKS(100));
+    s_stop_pending = true;
+    if (xQueueSend(s_act, &a, pdMS_TO_TICKS(100)) != pdTRUE) s_stop_pending = false;
 }
 
 // 按住 / 松开一个修饰键(语音键):modifier 为 HID 修饰位,0 表示 Apple Fn。

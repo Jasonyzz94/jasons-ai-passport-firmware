@@ -55,11 +55,17 @@ static esp_err_t on_data(esp_http_client_event_t *e)
 // 通用 HTTP(S) 请求;auth 可为 NULL。返回状态码,失败 -1。
 // HTTPS 握手要临时占用二三十 KB 内存;界面(LVGL)和它共用同一个堆,内存被挤光时界面会卡死。
 // 所以内存不够时宁可这次不取,也不冒险。
+bool lv_mem_reserve_ok(void);
+
 bool local_tls_ok(void)
 {
+    if (!lv_mem_reserve_ok()) {   // 界面已经在用应急内存:先别联网抢内存
+        ESP_LOGW(TAG, "界面内存紧张,跳过加密请求");
+        return false;
+    }
     const size_t free_now = heap_caps_get_free_size(MALLOC_CAP_8BIT);
     const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-    if (free_now >= 56 * 1024 && largest >= 20 * 1024) return true;
+    if (free_now >= 48 * 1024 && largest >= 18 * 1024) return true;
     ESP_LOGW(TAG, "内存不足,跳过加密请求(空闲 %u,最大块 %u)", (unsigned)free_now, (unsigned)largest);
     return false;
 }
