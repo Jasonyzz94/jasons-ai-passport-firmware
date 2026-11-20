@@ -88,7 +88,20 @@ bool ble_radio_busy(void) { return s_stop_pending || s_state == BLE_STARTING; }
 static struct ble_hs_adv_fields s_fields;
 static char s_name[24];
 
+static char s_error[48];            // 最近一次失败原因(界面显示)
+static volatile int64_t s_start_ms;  // 进入 BLE_STARTING 的时间,用于启动超时
+#define START_TIMEOUT_MS 10000
+
+static void fail(const char *why)
+{
+    snprintf(s_error, sizeof(s_error), "%s", why);
+    ESP_LOGE(TAG, "蓝牙失败:%s(空闲 %u,最大块 %u)", why, (unsigned)sys_free_heap(),
+             (unsigned)sys_largest_block());
+    s_state = BLE_FAILED;
+}
+
 ble_state_t ble_hid_state(void) { return s_state; }
+const char *ble_hid_error(void) { return s_error; }
 const char *ble_hid_peer(void) { return "你的设备"; }
 
 // ---------------------------------------------------------------------------
@@ -102,9 +115,19 @@ static void adv_start(void)
     p.disc_mode = BLE_GAP_DISC_MODE_GEN;
     p.itvl_min = BLE_GAP_ADV_ITVL_MS(30);
     p.itvl_max = BLE_GAP_ADV_ITVL_MS(50);
-    if (ble_gap_adv_set_fields(&s_fields) == 0 &&
-        ble_gap_adv_start(BLE_OWN_ADDR_PUBLIC, NULL, BLE_HS_FOREVER, &p, gap_event, NULL) == 0) {
+    if (ble_gap_adv_active()) {
         s_state = BLE_ADVERTISING;
+        return;
+    }
+    int rc = ble_gap_adv_set_fields(&s_fields);
+    if (rc == 0) rc = ble_gap_adv_start(BLE_OWN_ADDR_PUBLIC, NULL, BLE_HS_FOREVER, &p, gap_event, NULL);
+    if (rc == 0) {
+        s_state = BLE_ADVERTISING;
+        ESP_LOGI(TAG, "开始广播(空闲 %u)", (unsigned)sys_free_heap());
+    } else if (s_state != BLE_CONNECTED) {
+        char why[48];
+        snprintf(why, sizeof(why), rc == BLE_HS_ENOMEM ? "广播失败:内存不足" : "广播失败 %d", rc);
+        fail(why);
     }
 }
 
@@ -149,7 +172,12 @@ static void hidd_event(void *handler_args, esp_event_base_t base, int32_t id, vo
 
 static void on_sync(void)
 {
-    ble_hs_util_ensure_addr(0);
+    const int rc = ble_hs_util_ensure_addr(0);
+    ESP_LOGI(TAG, "协议栈已同步(地址 %d,空闲 %u)", rc, (unsigned)sys_free_heap());
+    if (rc != 0) {
+        fail("蓝牙地址不可用");
+        return;
+    }
     adv_start();
 }
 
@@ -183,7 +211,13 @@ static void worker(void *arg)
     (void)arg;
     act_t a;
     for (;;) {
-        if (xQueueReceive(s_act, &a, portMAX_DELAY) != pdTRUE) continue;
+        if (xQueueReceive(s_act, &a, pdMS_TO_TICKS(1000)) != pdTRUE) {
+            // 启动超时:协议栈一直没同步 / 没开始广播,不能让界面永远停在"正在启动"。
+            if (s_running && s_state == BLE_STARTING && sys_now_ms() - s_start_ms > START_TIMEOUT_MS) {
+                fail("启动超时,协议栈未就绪");
+            }
+            continue;
+        }
         if (a.type == ACT_START) {
             do_start();
             continue;
@@ -258,6 +292,8 @@ static bool do_start(void)
 {
     if (s_running) return true;
     s_state = BLE_STARTING;
+    s_start_ms = sys_now_ms();
+    s_error[0] = '\0';
     // 没人用 Wi-Fi 时先让它关掉(开机对时),最多等 2 秒,给蓝牙腾内存。
     net_yield_radio();
     for (int i = 0; i < 20 && net_radio_on(); i++) vTaskDelay(pdMS_TO_TICKS(100));
@@ -266,9 +302,8 @@ static bool do_start(void)
     lv_mem_reserve_suspend(true);   // 把界面的应急储备让给蓝牙初始化
     const esp_err_t perr = nimble_port_init();
     if (perr != ESP_OK) {
-        ESP_LOGE(TAG, "nimble_port_init 失败: %s(空闲 %u)", esp_err_to_name(perr), (unsigned)sys_free_heap());
         lv_mem_reserve_suspend(false);
-        s_state = BLE_FAILED;
+        fail(perr == ESP_ERR_NO_MEM ? "初始化失败:内存不足" : "协议栈初始化失败");
         return false;
     }
     snprintf(s_name, sizeof(s_name), "%s", g_settings.name);
@@ -320,18 +355,17 @@ static bool do_start(void)
         herr = esp_hidd_dev_init(&cfg, ESP_HID_TRANSPORT_BLE, hidd_event, &s_dev);
     }
     if (herr != ESP_OK) {
-        ESP_LOGE(TAG, "esp_hidd_dev_init 失败: %s(空闲 %u)", esp_err_to_name(herr),
-                 (unsigned)sys_free_heap());
         s_dev = NULL;
         nimble_port_deinit();
         lv_mem_reserve_suspend(false);
-        s_state = BLE_FAILED;
+        fail(herr == ESP_ERR_NO_MEM ? "键盘服务失败:内存不足" : "键盘服务初始化失败");
         return false;
     }
     ble_store_config_init();
     s_running = true;
     nimble_port_freertos_init(host_task);
-    ESP_LOGI(TAG, "蓝牙已启动:空闲 %u", (unsigned)sys_free_heap());
+    ESP_LOGI(TAG, "蓝牙已初始化,等待协议栈同步:空闲 %u,最大块 %u", (unsigned)sys_free_heap(),
+             (unsigned)sys_largest_block());
     return true;
 }
 
@@ -365,6 +399,7 @@ bool ble_hid_start(void)
     }
     if (s_running) return true;
     s_state = BLE_STARTING;
+    s_start_ms = sys_now_ms();
     act_t a = {.type = ACT_START};
     return xQueueSend(s_act, &a, 0) == pdTRUE;
 }

@@ -237,7 +237,21 @@ static void relay_task(void *arg)
     int64_t next_auto = 0;
     for (;;) {
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000));
-        if (net_state() != NET_CONNECTED) continue;
+        if (net_state() != NET_CONNECTED) {
+            // 断网时也要回收已被应用放弃的请求:以前它们会一直占着(每个约 6KB),
+            // 多开几次天气 / 看板后内存就被吃掉,之后蓝牙因内存不足无法广播。
+            for (int i = 0; i < SLOTS; i++) {
+                slot_t *s = &s_slots[i];
+                if (s->abandoned && s->state != REQ_FREE) {
+                    free(s->body);
+                    free(s->resp);
+                    s->body = s->resp = NULL;
+                    s->abandoned = false;
+                    s->state = REQ_FREE;
+                }
+            }
+            continue;
+        }
         const int64_t now = sys_now_ms();
         if (s_discover || (s_state != SRV_OK && s_state != SRV_DISCOVERING && now >= next_auto)) {
             s_discover = false;

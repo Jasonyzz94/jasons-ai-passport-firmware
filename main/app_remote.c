@@ -445,7 +445,7 @@ static void tick(int64_t now)
         snprintf(buf, sizeof(buf), "等待配对:在电脑/手机蓝牙里选 %s", g_settings.name);
         break;
     case BLE_FAILED:
-        snprintf(buf, sizeof(buf), "蓝牙出错,返回后重试");
+        snprintf(buf, sizeof(buf), "蓝牙出错:%s。返回后重试", ble_hid_error()[0] ? ble_hid_error() : "未知原因");
         dot = C_ERR;
         break;
     default:

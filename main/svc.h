@@ -170,6 +170,7 @@ typedef enum {
 bool ble_hid_start(void);
 void ble_hid_stop(void);
 ble_state_t ble_hid_state(void);
+const char *ble_hid_error(void);   // 失败原因(BLE_FAILED 时)
 const char *ble_hid_peer(void);
 void ble_hid_key(uint8_t keycode, uint8_t modifiers);   // 按下 + 抬起
 void ble_hid_consumer(uint16_t usage);                  // 按下 + 抬起
