@@ -20,6 +20,10 @@
 - [ai-guide.zh_CN.md](ai-guide.zh_CN.md)：AI 开发工作流（面向 AI 编程助手：上下文建立、需求拆解、BSP 边界、验收交付格式）。
 - [核心 AI 技能](../../skills/README.zh_CN.md)：开发、环境准备、构建、真机测试及诊断，包含安装和使用示例。
 
+## 应用交接
+
+- [随身工具箱开发交接](toolbox-handoff.zh_CN.md)记录离线天气、扫码配置、多个 Wi-Fi 和语音助手的改进与验收方案。
+
 ## 工程约定（engineering）
 
 - [game-demo-to-device-acceptance.zh_CN.md](engineering/game-demo-to-device-acceptance.zh_CN.md)：共享 C/Wasm 游戏逻辑，先验收网页玩法，再验收真机表现。
