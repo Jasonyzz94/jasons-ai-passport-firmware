@@ -226,6 +226,7 @@ static void sta_connect(void)
 }
 
 static bool wanted(void) { return s_refs > 0 || s_boot_sync || s_portal_on; }
+static bool portal_holds_sta(void) { return s_portal_on && s_portal != PORTAL_SAVED; }
 
 static void apply(void)
 {
@@ -236,7 +237,14 @@ static void apply(void)
     }
     wifi_start(s_portal_on ? WIFI_MODE_APSTA : WIFI_MODE_STA);
     if (!s_wifi_started) return;
-    if (s_state == NET_OFF || s_state == NET_NO_CONFIG) sta_connect();
+    if (s_state != NET_OFF && s_state != NET_NO_CONFIG) return;
+    // 配网热点开着时,在手机提交新设置之前不去连家里的网络:连接尝试会扫遍所有信道,
+    // 连上后热点还会跟着换信道,手机和设备之间断断续续,网页加载一半就"点不动"。
+    if (portal_holds_sta()) {
+        s_state = settings_has_wifi() ? NET_OFF : NET_NO_CONFIG;
+        return;
+    }
+    sta_connect();
 }
 
 // ---------------------------------------------------------------------------
@@ -325,7 +333,11 @@ static void html_escape(char *out, size_t len, const char *in)
     out[o] = '\0';
 }
 
-static void chunk(httpd_req_t *req, const char *text) { httpd_resp_send_chunk(req, text, HTTPD_RESP_USE_STRLEN); }
+static void chunk(httpd_req_t *req, const char *text)
+{
+    const esp_err_t err = httpd_resp_send_chunk(req, text, HTTPD_RESP_USE_STRLEN);
+    if (err != ESP_OK) ESP_LOGW(TAG, "网页发送失败 %s(空闲 %u)", esp_err_to_name(err), (unsigned)sys_free_heap());
+}
 
 // 输入框:secret 字段不回显已保存的值,只提示"已保存,留空不变"。 glyph-check: ignore
 static void field(httpd_req_t *req, const char *label, const char *name, const char *value,
@@ -355,6 +367,7 @@ static void status_row(httpd_req_t *req, const char *k, const char *v, const cha
 
 static esp_err_t page_get(httpd_req_t *req)
 {
+    ESP_LOGI(TAG, "打开配置页(空闲 %u,最大块 %u)", (unsigned)sys_free_heap(), (unsigned)sys_largest_block());
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     chunk(req, k_css);
     char buf[200];
@@ -622,7 +635,8 @@ bool net_portal_take(portal_form_t *out)
 
 static void portal_start(void)
 {
-    s_portal_on = true;
+    if (!s_portal_on) lv_mem_reserve_suspend(true);
+    s_portal_on = true;   // 热点 + 网页服务器要内存:配网期间把界面的应急储备让出来
     s_portal = PORTAL_STARTING;
     snprintf(s_portal_ssid, sizeof(s_portal_ssid), "Passport-%s", sys_short_id());
     wifi_start(WIFI_MODE_APSTA);
@@ -665,6 +679,7 @@ static void portal_start(void)
 
 static void portal_stop(void)
 {
+    if (s_portal_on) lv_mem_reserve_suspend(false);
     s_dns_run = false;
     if (s_httpd) {
         httpd_stop(s_httpd);
@@ -690,7 +705,9 @@ static void net_task(void *arg)
             switch (cmd) {
             case CMD_UPDATE: apply(); break;
             case CMD_RECONNECT:
-                if (s_wifi_started) {
+                if (s_wifi_started && portal_holds_sta()) {
+                    s_state = NET_OFF;   // 配网中:先不重连(见 apply 里的说明)
+                } else if (s_wifi_started) {
                     if (s_state == NET_FAILED) {
                         retry_at = sys_now_ms() + 30000;   // 连不上:30 秒后再试
                     } else {

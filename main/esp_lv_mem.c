@@ -22,7 +22,7 @@ static void *volatile s_reserve;
 static volatile bool s_used_reserve;
 // 蓝牙启动 / 运行期间让出储备并且不补回:蓝牙初始化需要大块内存,
 // 以前储备会在它初始化到一半时被补回去,导致蓝牙出错甚至重启。
-static volatile bool s_suspended;
+static volatile int s_suspended;   // 让出计数:蓝牙、配网热点各占一份
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 
 static void *take_reserve(void)
@@ -40,7 +40,7 @@ static void refill(void)
     void *p = malloc(RESERVE_BYTES);
     if (!p) return;
     taskENTER_CRITICAL(&s_mux);
-    const bool keep = !s_suspended && !s_reserve;
+    const bool keep = s_suspended == 0 && !s_reserve;
     if (keep) s_reserve = p;
     taskEXIT_CRITICAL(&s_mux);
     if (!keep) {
@@ -55,7 +55,10 @@ static void refill(void)
 
 void lv_mem_reserve_suspend(bool on)
 {
-    s_suspended = on;
+    taskENTER_CRITICAL(&s_mux);
+    if (on) s_suspended++;
+    else if (s_suspended > 0) s_suspended--;
+    taskEXIT_CRITICAL(&s_mux);
     if (on) {
         free(take_reserve());
         ESP_LOGI(TAG, "让出应急储备(空闲 %u)", (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT));
