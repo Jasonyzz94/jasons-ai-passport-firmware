@@ -1,0 +1,71 @@
+# 复制为 config.toml 后按需修改。所有密钥只放在这台电脑上,设备上不存。
+
+[server]
+name = "Mac mini"          # 设备上显示的服务器名
+port = 8787
+auto_approve = true        # 局域网里的新设备自动配对
+# public_url = "http://192.168.1.20:8787"   # 自动检测不准时手动指定
+
+[location]                 # 天气位置
+city = "上海"
+latitude = 31.23
+longitude = 121.47
+timezone = "Asia/Shanghai"
+
+[llm]
+provider = "anthropic"     # 读取环境变量 ANTHROPIC_API_KEY 或 `ant auth login` 的登录
+model = "claude-opus-5-5"
+effort = "low"             # 语音问答默认 low(更快);想要更周到改 medium / high
+# 访问不了 Anthropic 时可以换成国内兼容 OpenAI 接口的模型,例如:
+# provider = "openai_compatible"
+# base_url = "https://api.deepseek.com/v1"
+# model = "deepseek-chat"
+# api_key_env = "DEEPSEEK_API_KEY"
+
+[asr]
+provider = "mlx_whisper"   # Apple 芯片本地识别,免费;首次会下载模型
+# model = "mlx-community/whisper-large-v3-turbo"
+# provider = "faster_whisper"   # Intel Mac / Linux
+# provider = "openai"           # 云端识别,需要 api_key_env
+
+[tts]
+provider = "say"           # macOS 自带朗读
+voice = "Tingting"         # 系统设置 > 辅助功能 > 朗读内容 里可下载更好听的中文声音
+
+[home]                     # Home Assistant(可选)
+# url = "http://homeassistant.local:8123"
+# token = "长期访问令牌"
+# entities = ["light.living_room", "switch.fan", "scene.home", "sensor.room_temperature"]
+
+# 信息看板卡片(可选,不写则显示默认三张)
+# [[board.cards]]
+# type = "countdown"
+# title = "距离生日"
+# date = "2027-03-08"
+# color = "F472B6"
+# icon = "heart"
+#
+# [[board.cards]]
+# type = "github"
+# title = "GitHub 通知"
+# token = "ghp_..."
+# icon = "bell"
+#
+# [[board.cards]]
+# type = "exchange"
+# title = "美元汇率"
+# base = "USD"
+# target = "CNY"
+# icon = "coin"
+#
+# [[board.cards]]
+# type = "system"
+# title = "这台电脑"
+
+# 日历:iCloud / Google / Outlook 的公开订阅地址(.ics 或 webcal://)
+# [[board.cards]]
+# type = "calendar"
+# title = "下一个日程"
+# url = "https://example.com/calendar.ics"
+# color = "FBBF24"
+# icon = "check"

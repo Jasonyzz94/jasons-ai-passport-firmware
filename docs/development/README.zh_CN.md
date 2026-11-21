@@ -20,6 +20,10 @@
 - [ai-guide.zh_CN.md](ai-guide.zh_CN.md)：AI 开发工作流（面向 AI 编程助手：上下文建立、需求拆解、BSP 边界、验收交付格式）。
 - [核心 AI 技能](../../skills/README.zh_CN.md)：开发、环境准备、构建、真机测试及诊断，包含安装和使用示例。
 
+## 应用交接
+
+- [随身工具箱开发交接](toolbox-handoff.zh_CN.md)记录离线天气、扫码配置、多个 Wi-Fi 和语音助手的改进与验收方案。
+
 ## 工程约定（engineering）
 
 - [game-demo-to-device-acceptance.zh_CN.md](engineering/game-demo-to-device-acceptance.zh_CN.md)：共享 C/Wasm 游戏逻辑，先验收网页玩法，再验收真机表现。
@@ -29,6 +33,7 @@
 - [coding-conventions.zh_CN.md](engineering/coding-conventions.zh_CN.md)：代码约定（语言风格、复用、注释、测试同步、资源约束等），包含中文字体接入、空白/方框排查与显示验收。
 - [lvgl-chinese-fonts.zh_CN.md](engineering/lvgl-chinese-fonts.zh_CN.md)：CJK 配置、字体生成/链接、fallback 示例、缺字检查和故障排查的分步指南。
 - [wifi-provisioning.zh_CN.md](engineering/wifi-provisioning.zh_CN.md)：参考 BLUFI 分支实现蓝牙 Wi-Fi 配网，包含配套小程序名称及接入检查。
+- [relay-network-review.zh_CN.md](engineering/relay-network-review.zh_CN.md)：中转服务发现诊断证据与另一份 DeepSeek 反馈的审阅结论。
 
 ## CI（ci）
 

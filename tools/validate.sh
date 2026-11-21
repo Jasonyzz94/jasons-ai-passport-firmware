@@ -112,6 +112,33 @@ run_static_checks() {
         tests/test_bsp_audio_recovery.c components/bsp/src/bsp_es8311_sleep_check.c \
         -o "${test_dir}/test_bsp_audio_recovery"
     "${test_dir}/test_bsp_audio_recovery"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_pomodoro.c main/pomodoro.c -o "${test_dir}/test_pomodoro"
+    "${test_dir}/test_pomodoro"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_icons.c main/icons.c -o "${test_dir}/test_icons"
+    "${test_dir}/test_icons"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_audio_dsp.c main/audio_dsp.c -lm -o "${test_dir}/test_audio_dsp"
+    "${test_dir}/test_audio_dsp"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_hid_keymap.c main/hid_keymap.c -o "${test_dir}/test_hid_keymap"
+    "${test_dir}/test_hid_keymap"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_link_proto.c main/link_proto.c main/audio_dsp.c -lm -o "${test_dir}/test_link_proto"
+    "${test_dir}/test_link_proto"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_noise_gen.c main/noise_gen.c -o "${test_dir}/test_noise_gen"
+    "${test_dir}/test_noise_gen"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_ics_parse.c main/ics_parse.c -o "${test_dir}/test_ics_parse"
+    "${test_dir}/test_ics_parse"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_pet.c main/pet.c -o "${test_dir}/test_pet"
+    "${test_dir}/test_pet"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_breath.c main/breath.c -o "${test_dir}/test_breath"
+    "${test_dir}/test_breath"
     for demo in audio low_power ble wifi; do
         "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
             -ffunction-sections -fdata-sections -Itests/demo_stubs -Imain \
@@ -127,6 +154,21 @@ run_static_checks() {
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_firmware.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_archive_firmware.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_install_passport_skills.py
+    # 直连天气转换用到 ESP-IDF 自带的 cJSON;没激活 ESP-IDF 时跳过。
+    if [[ -n "${IDF_PATH:-}" && -f "${IDF_PATH}/components/json/cJSON/cJSON.c" ]]; then
+        "${CC:-cc}" -std=gnu11 -Wall -Wextra -Werror -Imain -I"${IDF_PATH}/components/json/cJSON" \
+            tests/test_weather_shape.c main/weather_shape.c "${IDF_PATH}/components/json/cJSON/cJSON.c" \
+            -lm -o "${test_dir}/test_weather_shape"
+        "${test_dir}/test_weather_shape"
+    else
+        echo "weather shape tests: SKIPPED (activate ESP-IDF for cJSON)"
+    fi
+    # 中转服务器测试需要 aiohttp/anthropic(server/requirements.txt);没装时跳过并明确报告。
+    if "${SERVER_PYTHON:-python3}" -c "import aiohttp, anthropic" 2>/dev/null; then
+        PYTHONDONTWRITEBYTECODE=1 "${SERVER_PYTHON:-python3}" -m unittest discover -s server/tests -q
+    else
+        echo "Server tests: SKIPPED (install server/requirements.txt or set SERVER_PYTHON)"
+    fi
     rm -rf "${test_dir}"
     echo "Host tests: PASS"
     if [[ "${actionlint_skipped}" == 1 ]]; then

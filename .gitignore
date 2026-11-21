@@ -11,3 +11,10 @@ managed_components/
 /.agents/skills/passport-build
 /.agents/skills/passport-device-test
 /.agents/skills/passport-debug
+
+# macOS
+.DS_Store
+
+# 中转服务器本地配置(含密钥)与缓存
+/server/config.toml
+__pycache__/
