@@ -110,6 +110,25 @@ static void test_resample(void)
     assert(resample24_to16(&c, in, 3, out) == 2 && out[0] == 32767 && out[1] == 32767);
 }
 
+static void test_transport(void)
+{
+    assert(voice_key_transport_ok("https://api.deepseek.com/v1/chat/completions", "sk-x"));
+    assert(voice_key_transport_ok("http://api.example.com/v1", ""));   // 无密钥不限制
+    assert(!voice_key_transport_ok("http://api.example.com/v1", "sk-x"));
+    assert(!voice_key_transport_ok("http://8.8.8.8:11434/v1", "sk-x"));
+    assert(voice_key_transport_ok("http://192.168.1.20:11434/v1", "sk-x"));
+    assert(voice_key_transport_ok("http://10.0.0.5/v1", "sk-x"));
+    assert(voice_key_transport_ok("http://172.20.1.1/v1", "sk-x"));
+    assert(!voice_key_transport_ok("http://172.32.1.1/v1", "sk-x"));
+    assert(voice_key_transport_ok("http://LocalHost:8080/v1", "sk-x"));
+    assert(voice_key_transport_ok("http://mac-mini.local:11434/v1", "sk-x"));
+    assert(!voice_key_transport_ok("http://192.168.1.20.evil.com/v1", "sk-x"));
+    assert(!voice_key_transport_ok("ftp://192.168.1.2/v1", "sk-x"));
+    char buf[64];
+    voice_error_text(buf, sizeof(buf), "对话", VOICE_ERR_INSECURE);
+    assert(!strcmp(buf, "对话:公网接口须用https"));
+}
+
 int main(void)
 {
     test_mode();
@@ -117,6 +136,7 @@ int main(void)
     test_errors();
     test_utf8();
     test_resample();
+    test_transport();
     puts("voice cfg tests: PASS");
     return 0;
 }

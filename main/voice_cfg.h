@@ -34,9 +34,14 @@ void voice_resolve(const char *api_base, const char *api_key, const char *voice_
 #define VOICE_ERR_PARSE (-3)    // 返回内容看不懂(太长或格式不对)
 #define VOICE_ERR_EMPTY (-4)    // 识别结果为空
 #define VOICE_ERR_UPLOAD (-5)   // 上传中断
+#define VOICE_ERR_INSECURE (-6) // 密钥不能用明文 http 发往公网
 const char *voice_reason(int status);
 // "识别:密钥无效" 这类屏幕提示。stage 例 "识别" / "对话" / "朗读"。
 void voice_error_text(char *out, size_t cap, const char *stage, int status);
+
+// 密钥能不能发往这个地址:https 都行;http 只允许本机和局域网
+// (例如自建的 Ollama),免得密钥在公网上明文传输。没有密钥时任何地址都行。
+bool voice_key_transport_ok(const char *url, const char *key);
 
 // 按 UTF-8 字符边界拷贝:放不下时在完整字符处截断,不会留下半个汉字。返回写入的字节数。
 size_t utf8_copy(char *dst, size_t cap, const char *src);

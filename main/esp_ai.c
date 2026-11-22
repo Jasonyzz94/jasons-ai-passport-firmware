@@ -264,6 +264,10 @@ static esp_http_client_handle_t open_direct(const char *base, const char *key, c
 {
     char url[160];
     snprintf(url, sizeof(url), "%s%s", base, path);
+    if (!voice_key_transport_ok(url, key)) {
+        *err = VOICE_ERR_INSECURE;
+        return NULL;
+    }
     *err = VOICE_ERR_MEM;
     if (strncmp(url, "https", 5) == 0 && !local_tls_ok()) return NULL;
     esp_http_client_config_t cfg = {
@@ -414,8 +418,10 @@ static int direct_chat(const char *question, char *answer, size_t len)
 
     int err;
     esp_http_client_handle_t c = open_direct(g_settings.api_base, g_settings.api_key, "/chat/completions",
-                                             60000, &err);
+                                             45000, &err);
     int status = err;
+    char *resp = NULL;
+    int got = 0;
     if (c) {
         esp_http_client_set_header(c, "Content-Type", "application/json");
         const int bl = (int)strlen(body);
@@ -423,32 +429,29 @@ static int direct_chat(const char *question, char *answer, size_t len)
         if (esp_http_client_open(c, bl) == ESP_OK && esp_http_client_write(c, body, bl) == bl
             && esp_http_client_fetch_headers(c) >= 0) {
             status = esp_http_client_get_status_code(c);
-            char *resp = malloc(CHAT_RESP_MAX);
-            if (!resp) {
-                status = VOICE_ERR_MEM;
-            } else {
-                const int got = read_body(c, resp, CHAT_RESP_MAX);
-                if (status == 200) {
-                    // 读满说明被截断了(例如推理模型带了很长的思考内容)
-                    cJSON *j = got < CHAT_RESP_MAX - 1 ? cJSON_Parse(resp) : NULL;
-                    const cJSON *ch = cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(j, "choices"), 0);
-                    const cJSON *msg = cJSON_GetObjectItemCaseSensitive(ch, "message");
-                    const cJSON *content = cJSON_GetObjectItemCaseSensitive(msg, "content");
-                    if (cJSON_IsString(content) && content->valuestring[0]) {
-                        utf8_copy(answer, len, content->valuestring);
-                    } else {
-                        status = VOICE_ERR_PARSE;
-                    }
-                    cJSON_Delete(j);
-                }
-                if (status != 200) ESP_LOGW(TAG, "对话失败 %d: %.200s", status, resp);
-                free(resp);
-            }
+            resp = malloc(CHAT_RESP_MAX);
+            if (!resp) status = VOICE_ERR_MEM;
+            else got = read_body(c, resp, CHAT_RESP_MAX);
         }
         esp_http_client_close(c);
         esp_http_client_cleanup(c);
     }
     free(body);
+    // 先关掉加密连接再解析:握手和收发缓冲已经还回去,解析 JSON 不和它们抢内存。
+    if (resp) {
+        if (status == 200) {
+            // 读满说明被截断了(例如推理模型带了很长的思考内容)
+            cJSON *j = got < CHAT_RESP_MAX - 1 ? cJSON_Parse(resp) : NULL;
+            const cJSON *ch = cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(j, "choices"), 0);
+            const cJSON *msg = cJSON_GetObjectItemCaseSensitive(ch, "message");
+            const cJSON *content = cJSON_GetObjectItemCaseSensitive(msg, "content");
+            if (cJSON_IsString(content) && content->valuestring[0]) utf8_copy(answer, len, content->valuestring);
+            else status = VOICE_ERR_PARSE;
+            cJSON_Delete(j);
+        }
+        if (status != 200) ESP_LOGW(TAG, "对话失败 %d: %.200s", status, resp);
+        free(resp);
+    }
     if (status == 200) {
         if (s_hist_n == 2) {
             memcpy(s_hist_q[0], s_hist_q[1], sizeof(s_hist_q[0]));
@@ -699,6 +702,18 @@ void ai_release(void)
 }
 
 bool ai_active(void) { return s_task != NULL; }
+
+bool ai_cancelling(void) { return s_cancel && s_state != AI_IDLE && s_state != AI_ERROR; }
+
+void ai_clear_history(void)
+{
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_hist_n = 0;   // 只在对话成功后由任务改写;这里清掉后,下一轮不再带旧上下文
+    s_a[0] = '\0';
+    s_audio_id[0] = '\0';
+    s_last_direct = false;
+    if (s_lock) xSemaphoreGive(s_lock);
+}
 
 void ai_cancel(void)
 {

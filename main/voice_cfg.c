@@ -46,6 +46,7 @@ const char *voice_reason(int status)
     case VOICE_ERR_PARSE: return "回复异常";
     case VOICE_ERR_EMPTY: return "没听清";
     case VOICE_ERR_UPLOAD: return "上传中断";
+    case VOICE_ERR_INSECURE: return "公网接口须用https";
     case 401:
     case 403: return "密钥无效";
     case 402: return "余额不足";
@@ -66,6 +67,29 @@ void voice_error_text(char *out, size_t cap, const char *stage, int status)
     char buf[96];
     snprintf(buf, sizeof(buf), "%s:%s", stage, voice_reason(status));
     utf8_copy(out, cap, buf);
+}
+
+static bool prefix(const char *s, const char *p) { return strncmp(s, p, strlen(p)) == 0; }
+
+bool voice_key_transport_ok(const char *url, const char *key)
+{
+    if (!key[0] || prefix(url, "https://")) return true;
+    if (!prefix(url, "http://")) return false;
+    char host[64];
+    const char *h = url + 7;
+    size_t n = strcspn(h, ":/?#");
+    if (n == 0 || n >= sizeof(host)) return false;
+    memcpy(host, h, n);
+    host[n] = '\0';
+    for (char *c = host; *c; c++) if (*c >= 'A' && *c <= 'Z') *c = (char)(*c - 'A' + 'a');
+    if (!strcmp(host, "localhost")) return true;
+    if (n > 6 && !strcmp(host + n - 6, ".local")) return true;   // mDNS 局域网主机名
+    unsigned a, b, c, d;
+    char tail;
+    if (sscanf(host, "%u.%u.%u.%u%c", &a, &b, &c, &d, &tail) != 4 || a > 255 || b > 255 || c > 255 || d > 255)
+        return false;
+    return a == 10 || a == 127 || (a == 192 && b == 168) || (a == 172 && b >= 16 && b <= 31)
+        || (a == 169 && b == 254);
 }
 
 size_t utf8_copy(char *dst, size_t cap, const char *src)

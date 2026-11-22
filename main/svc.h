@@ -248,6 +248,10 @@ const char *ai_error(void);
 // 新一轮问答完成时返回 true 并拷出文本。
 bool ai_take_result(char *question, size_t qlen, char *answer, size_t alen);
 void ai_replay(void);
+// 已按取消,但后台还在等网络请求结束(这时再按说话不会开始)。
+bool ai_cancelling(void);
+// 清空大模型的上下文(屏幕上的对话清空时一起调用),并忘掉可重播的上一条。
+void ai_clear_history(void);
 // 离开语音助手时调用:后台任务与缓冲区(约 14KB)空闲后释放。
 void ai_release(void);
 bool ai_active(void);

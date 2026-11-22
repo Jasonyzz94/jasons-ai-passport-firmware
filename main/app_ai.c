@@ -178,6 +178,10 @@ static bool key(sys_key_t k, sys_key_ev_t ev)
 {
     const ai_state_t st = ai_state();
     if (k == SYS_KEY_OK) {
+        if (ev == SYS_EV_PRESS && ai_cancelling()) {
+            shell_toast("正在结束上一条,稍等");
+            return true;
+        }
         if (ev == SYS_EV_PRESS && (st == AI_IDLE || st == AI_ERROR)) {
             if (!voice_ready(g_settings.ai_mode, relay_state() == SRV_OK, g_settings.api_key[0] != '\0',
                              net_state() == NET_CONNECTED)) {
@@ -219,6 +223,7 @@ static bool key(sys_key_t k, sys_key_ev_t ev)
     }
     if (k == SYS_KEY_DOWN && ev == SYS_EV_LONG) {
         s_turn_count = 0;
+        ai_clear_history();
         render_chat();
         shell_toast("对话已清空");
         return true;
