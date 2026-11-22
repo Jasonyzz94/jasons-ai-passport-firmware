@@ -396,6 +396,8 @@ static const char k_css[] =   // glyph-check: ignore
     ".s{color:#667185}details summary{color:#a3adbd;font-size:14px;padding:6px 0}"
     ".sv{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;margin:6px 0;"
     "border-radius:10px;background:#0b0e14;border:1px solid #2a3241}.sv .ghost{padding:8px 12px}"
+    ".chk{display:flex;gap:8px;align-items:center}.chk input{width:auto;margin:0}"
+    ".go.dirty::after{content:' · 有改动未保存';font-weight:400}"
     ".cur{color:#34d399;font-size:13px}.go:disabled{opacity:.5}.msg{display:none;padding:12px;border-radius:12px;"
     "margin:10px 0 0;font-size:15px}.done{background:#1e2531;color:#f1f4f9}"
     ".go{margin-top:6px;width:100%;padding:15px;border:0;border-radius:12px;background:#ff6b57;color:#0b0e14;"
@@ -441,7 +443,11 @@ static const char k_script[] =   // glyph-check: ignore
     "const F=['api_base','llm_model','voice_base','asr_model','tts_model','tts_voice','tts_rate'];"
     "$('#prov').onchange=()=>{const p=P[$('#prov').value];"
     "if(!p){$('#provtip').textContent=$('#prov').value=='custom'?'按服务商文档填写;服务商没有识别或朗读接口时,语音接口另填一家。':'';return}"
-    "F.forEach((k,i)=>$('[name='+k+']').value=p[i]);$('#provtip').textContent=p[7]};"
+    "F.forEach((k,i)=>{const e=$('[name='+k+']');e.value=p[i];e.dispatchEvent(new Event('input',{bubbles:true}))});"
+    "$('#provtip').textContent=p[7]+'填好后分别点两张卡片的保存。'};"
+    // 改了没保存的卡片在按钮上提示
+    "A('form.sec').forEach(f=>{const b=f.querySelector('.go');"
+    "f.addEventListener('input',()=>b.classList.add('dirty'));f.addEventListener('change',()=>b.classList.add('dirty'))});"
     // 每个分区单独保存;无线网络先试连,连上才算保存
     "A('form.sec').forEach(f=>f.onsubmit=async e=>{e.preventDefault();const b=f.querySelector('.go');"
     "const wifi=f.dataset.sec=='wifi';if(wifi&&!$('#ssid').value){say(f,'先选一个网络或输入网络名称','#7f1d1d');return}"
@@ -456,7 +462,9 @@ static const char k_script[] =   // glyph-check: ignore
     "b.disabled=false;return}}"
     "say(f,'还没有结果,请看设备屏幕。','#1e2531');b.disabled=false;return}"
     "for(let i=0;i<25;i++){await wait(400);const s=await st();"
-    "if(s&&s.applied>=r.seq){say(f,'已保存。可以继续改其他项,或点最下面的完成配置。','#065f46');b.disabled=false;return}}"
+    "if(s&&s.applied>=r.seq){say(f,'已保存。可以继续改其他项,或点最下面的完成配置。','#065f46');"
+    "b.disabled=false;b.classList.remove('dirty');f.querySelectorAll('[type=password]').forEach(x=>{if(x.value){"
+    "x.value='';x.placeholder='已保存,留空不变'}});return}}"
     "say(f,'设备没有确认保存,请看设备屏幕后重试。','#7f1d1d');b.disabled=false});"
     "A('.forget').forEach(b=>b.onclick=async()=>{if(!confirm('忘记 '+b.dataset.s+'?以后不再自动连接它。'))return;"
     "b.disabled=true;try{await fetch('/forget',{method:'POST',body:new URLSearchParams({ssid:b.dataset.s})})}catch(_){}"
@@ -658,31 +666,37 @@ static esp_err_t page_get(httpd_req_t *req)
     chunk(req, "</details>");
     form_close(req, "保存天气位置");  // glyph-check: ignore
 
-    // 语音助手:选通道,再按服务商预设填对话和语音两组接口
-    form_open(req, "voice", "语音助手",  // glyph-check: ignore
-              "语音助手要三步:识别(语音转文字)、对话、朗读。DeepSeek 这类只提供对话的服务,"  // glyph-check: ignore
-              "需要另配一家做识别和朗读,或者交给家里的 Mac 中转在本地完成。");  // glyph-check: ignore
+    // 语音助手:使用方式、服务商预设、对话、识别与朗读,各自保存
+    chunk(req, "<h1 style='font-size:18px;margin:22px 0 0'>语音助手</h1><p>语音助手要三步:识别(语音转文字)、"  // glyph-check: ignore
+               "对话、朗读。DeepSeek 这类只提供对话的服务,需要另配一家做识别和朗读,或者交给家里的 Mac 中转在本地完成。</p>");  // glyph-check: ignore
+    form_open(req, "mode", "使用方式", NULL);  // glyph-check: ignore
     {
         char sel[700];
         const int m = g_settings.ai_mode;
         snprintf(sel, sizeof(sel),
-                 "<label>使用方式</label><select name=ai_mode>"  // glyph-check: ignore
+                 "<select name=ai_mode>"
                  "<option value=0%s>自动:找得到 Mac 中转就用中转,否则云端直连</option>"  // glyph-check: ignore
                  "<option value=1%s>只用 Mac 中转(识别和朗读在 Mac 本地)</option>"  // glyph-check: ignore
                  "<option value=2%s>只用云端直连</option></select>",  // glyph-check: ignore
                  m == 0 ? " selected" : "", m == 1 ? " selected" : "", m == 2 ? " selected" : "");
         chunk(req, sel);
     }
-    chunk(req, "<label>云端服务商</label><select id=prov><option value=keep>保持当前设置</option>"  // glyph-check: ignore
-              "<option value=dssf>DeepSeek 对话 + 硅基流动语音(两个密钥)</option>"  // glyph-check: ignore
-              "<option value=sf>硅基流动全包(一个密钥)</option>"  // glyph-check: ignore
-              "<option value=oa>OpenAI 全包(一个密钥)</option>"  // glyph-check: ignore
-              "<option value=custom>自定义兼容 OpenAI 的接口</option></select>"  // glyph-check: ignore
-              "<p id=provtip></p><h3>对话</h3>");  // glyph-check: ignore
+    form_close(req, "保存使用方式");  // glyph-check: ignore
+    chunk(req, "<div class=card><h2>服务商预设(可选)</h2><p>选一个会把下面两张卡片的地址和模型填好,"  // glyph-check: ignore
+               "再分别填密钥、分别保存。</p><select id=prov><option value=keep>不使用预设</option>"  // glyph-check: ignore
+               "<option value=dssf>DeepSeek 对话 + 硅基流动语音(两个密钥)</option>"  // glyph-check: ignore
+               "<option value=sf>硅基流动全包(一个密钥)</option>"  // glyph-check: ignore
+               "<option value=oa>OpenAI 全包(一个密钥)</option>"  // glyph-check: ignore
+               "<option value=custom>自定义兼容 OpenAI 的接口</option></select><p id=provtip></p></div>");  // glyph-check: ignore
+
+    form_open(req, "chat", "对话", "密钥留空表示不修改。换了接口地址却没填新密钥时,旧密钥会自动清除,不会发给别家。");  // glyph-check: ignore
     field(req, "对话密钥", "api_key", g_settings.api_key, true, "sk-...");  // glyph-check: ignore
     field(req, "对话接口地址", "api_base", g_settings.api_base, false, "https://api.deepseek.com/v1");  // glyph-check: ignore
     field(req, "对话模型", "llm_model", g_settings.llm_model, false, "deepseek-chat");  // glyph-check: ignore
-    chunk(req, "<h3>识别与朗读</h3><p>接口留空表示和对话用同一家、同一个密钥。</p>");  // glyph-check: ignore
+    chunk(req, "<label class=chk><input type=checkbox name=clr value=1>清除已保存的对话密钥</label>");  // glyph-check: ignore
+    form_close(req, "保存对话设置");  // glyph-check: ignore
+
+    form_open(req, "speech", "识别与朗读", "接口留空表示和对话用同一家、同一个密钥。");  // glyph-check: ignore
     field(req, "语音密钥", "voice_key", g_settings.voice_key, true, "留空 = 同对话密钥");  // glyph-check: ignore
     field(req, "语音接口地址", "voice_base", g_settings.voice_base, false, "留空 = 同对话接口");  // glyph-check: ignore
     field(req, "识别模型", "asr_model", g_settings.asr_model, false, NULL);  // glyph-check: ignore
@@ -700,23 +714,24 @@ static esp_err_t page_get(httpd_req_t *req)
                  r == VOICE_TTS_OFF ? " selected" : "");
         chunk(req, sel);
     }
-    chunk(req, "<label style='display:flex;gap:8px;align-items:center'><input type=checkbox name=clr_keys value=1"
-              " style='width:auto;margin:0'>清除已保存的对话和语音密钥</label>"  // glyph-check: ignore
-              "<p>换了接口地址却没填新密钥时,旧密钥会自动清除,不会发给别家。密钥保存在设备里,请勿把设备借给不信任的人。</p>");  // glyph-check: ignore
-    form_close(req, "保存语音设置");  // glyph-check: ignore
+    chunk(req, "<label class=chk><input type=checkbox name=clr value=1>清除已保存的语音密钥</label>"  // glyph-check: ignore
+               "<p>密钥保存在设备里,请勿把设备借给不信任的人。</p>");  // glyph-check: ignore
+    form_close(req, "保存识别与朗读");  // glyph-check: ignore
 
-    // 家庭助手、日历、中转服务器
-    form_open(req, "more", "更多(可选)", NULL);  // glyph-check: ignore
-    chunk(req, "<h3>家庭助手</h3><p>长期访问令牌在 Home Assistant 的个人资料页底部创建;实体用逗号分隔。</p>");  // glyph-check: ignore
+    // 其他:各自保存
+    chunk(req, "<h1 style='font-size:18px;margin:22px 0 0'>更多(可选)</h1>");  // glyph-check: ignore
+    form_open(req, "ha", "家庭助手", "长期访问令牌在 Home Assistant 的个人资料页底部创建;实体用逗号分隔。");  // glyph-check: ignore
     field(req, "地址", "ha_url", g_settings.ha_url, false, "http://192.168.1.5:8123");  // glyph-check: ignore
     field(req, "长期访问令牌", "ha_token", g_settings.ha_token, true, NULL);  // glyph-check: ignore
     field(req, "实体", "ha_ents", g_settings.ha_entities, false, "light.living_room, switch.fan");  // glyph-check: ignore
-    chunk(req, "<h3>日历(信息看板显示日程)</h3><p>在 iCloud / Google / Outlook / "  // glyph-check: ignore
-               "飞书 / 钉钉等日历里找\"订阅链接\"或\"公开 iCal 地址\",粘贴到这里。</p>");  // glyph-check: ignore
+    form_close(req, "保存家庭助手");  // glyph-check: ignore
+    form_open(req, "cal", "日历(信息看板显示日程)", "在 iCloud / Google / Outlook / 飞书 / 钉钉等日历里找"  // glyph-check: ignore
+              "\"订阅链接\"或\"公开 iCal 地址\",粘贴到这里。");  // glyph-check: ignore
     field(req, "日历订阅地址(.ics 或 webcal://)", "ics", g_settings.ics_url, false, "https://...ics");  // glyph-check: ignore
-    chunk(req, "<h3>家里的中转服务器</h3><p>留空会自动在局域网查找;找不到时其他功能照常直连。</p>");  // glyph-check: ignore
+    form_close(req, "保存日历");  // glyph-check: ignore
+    form_open(req, "server", "家里的中转服务器", "留空会自动在局域网查找;找不到时其他功能照常直连。");  // glyph-check: ignore
     field(req, "服务器地址", "server", g_settings.server, false, "http://192.168.1.20:8787");  // glyph-check: ignore
-    form_close(req, "保存");  // glyph-check: ignore
+    form_close(req, "保存服务器地址");  // glyph-check: ignore
 
     chunk(req, "<button id=done class=\"go done\" type=button>完成配置,关闭设备热点</button>");  // glyph-check: ignore
     chunk(req, k_script);
@@ -888,9 +903,15 @@ static esp_err_t page_save(httpd_req_t *req)
         snprintf(buf, sizeof(buf), "{\"ssid\":\"%s\"}", esc);
         return httpd_resp_sendstr(req, buf);
     }
-    const portal_sec_t section = !strcmp(sec, "weather") ? PORTAL_SEC_WEATHER
-                               : !strcmp(sec, "voice")   ? PORTAL_SEC_VOICE
-                               : !strcmp(sec, "more")    ? PORTAL_SEC_MORE : 0;
+    static const struct { const char *name; portal_sec_t sec; } k_secs[] = {
+        {"weather", PORTAL_SEC_WEATHER}, {"mode", PORTAL_SEC_MODE}, {"chat", PORTAL_SEC_CHAT},
+        {"speech", PORTAL_SEC_SPEECH},   {"ha", PORTAL_SEC_HA},     {"cal", PORTAL_SEC_CAL},
+        {"server", PORTAL_SEC_SERVER},
+    };
+    portal_sec_t section = 0;
+    for (size_t k = 0; k < sizeof(k_secs) / sizeof(k_secs[0]); k++) {
+        if (!strcmp(sec, k_secs[k].name)) section = k_secs[k].sec;
+    }
     if (!section) {
         free(body);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "unknown section");
@@ -906,7 +927,7 @@ static esp_err_t page_save(httpd_req_t *req)
     s_form.ai_mode = num[0] ? atoi(num) : -1;
     form_field(body, "tts_rate", num, sizeof(num));
     s_form.tts_rate = num[0] ? atoi(num) : -1;
-    form_field(body, "clr_keys", num, sizeof(num));
+    form_field(body, "clr", num, sizeof(num));   // 本卡片的"清除密钥"
     s_form.clear_keys = num[0] == '1';
     form_field(body, "api_base", s_form.api_base, sizeof(s_form.api_base));
     form_field(body, "api_key", s_form.api_key, sizeof(s_form.api_key));

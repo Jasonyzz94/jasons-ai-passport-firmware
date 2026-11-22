@@ -82,14 +82,22 @@ const char *net_try_ssid(void);
 
 // 手机在配置页按分区提交的内容(无线网络由 esp_net 自己处理,不经过这里)。
 // 只有本分区的字段有意义;空字段表示未填写(密钥类字段留空 = 不修改)。
-typedef enum { PORTAL_SEC_WEATHER = 1, PORTAL_SEC_VOICE, PORTAL_SEC_MORE } portal_sec_t;
+typedef enum {
+    PORTAL_SEC_WEATHER = 1,  // 天气位置
+    PORTAL_SEC_MODE,         // 语音助手使用方式
+    PORTAL_SEC_CHAT,         // 对话接口 / 密钥 / 模型
+    PORTAL_SEC_SPEECH,       // 识别与朗读接口 / 密钥 / 模型
+    PORTAL_SEC_HA,           // 家庭助手
+    PORTAL_SEC_CAL,          // 日历
+    PORTAL_SEC_SERVER,       // 中转服务器地址
+} portal_sec_t;
 typedef struct {
     bool valid;
     portal_sec_t section;
     uint32_t seq;            // 应用并保存后用 net_portal_ack(seq) 告诉网页
     char server[96];
     int ai_mode, tts_rate;   // -1 = 表单里没有这一项
-    bool clear_keys;         // 勾选了"清除已保存的密钥"
+    bool clear_keys;         // 勾选了本卡片的"清除已保存的密钥"
     char api_base[80], api_key[168], llm_model[48];
     char voice_base[80], voice_key[168], asr_model[48], tts_model[48], tts_voice[64];
     char city[24], lat[12], lon[12];

@@ -401,37 +401,44 @@ static void tick(int64_t now)
                 SET(g_settings.lat, f.lat);
                 SET(g_settings.lon, f.lon);
                 what = "天气位置已保存";
-            } else if (f.section == PORTAL_SEC_VOICE) {
-                // 密钥绑定接口:换了接口地址却没填新密钥,就清掉旧密钥,不发给别家。
-                if (f.clear_keys) {
-                    g_settings.api_key[0] = '\0';
-                    g_settings.voice_key[0] = '\0';
-                }
+            } else if (f.section == PORTAL_SEC_MODE) {
                 if (f.ai_mode >= VOICE_MODE_AUTO && f.ai_mode <= VOICE_MODE_DIRECT) g_settings.ai_mode = f.ai_mode;
-                if (f.tts_rate == VOICE_TTS_OFF || f.tts_rate == VOICE_TTS_16K || f.tts_rate == VOICE_TTS_24K) {
-                    g_settings.tts_rate = f.tts_rate;
-                }
+                what = "使用方式已保存";
+            } else if (f.section == PORTAL_SEC_CHAT) {
+                // 密钥绑定接口:换了接口地址却没填新密钥,就清掉旧密钥,不发给别家。
+                if (f.clear_keys) g_settings.api_key[0] = '\0';
                 if (f.api_base[0] && strcmp(f.api_base, g_settings.api_base) != 0) {
                     SET(g_settings.api_base, f.api_base);
                     if (!f.api_key[0]) g_settings.api_key[0] = '\0';
                 }
                 if (f.api_key[0]) SET(g_settings.api_key, f.api_key);
+                if (f.llm_model[0]) SET(g_settings.llm_model, f.llm_model);
+                what = "对话设置已保存";
+            } else if (f.section == PORTAL_SEC_SPEECH) {
+                if (f.clear_keys) g_settings.voice_key[0] = '\0';
                 if (strcmp(f.voice_base, g_settings.voice_base) != 0) {   // 语音接口可以清空(= 同对话)
                     SET(g_settings.voice_base, f.voice_base);
                     if (!f.voice_key[0]) g_settings.voice_key[0] = '\0';
                 }
                 if (f.voice_key[0]) SET(g_settings.voice_key, f.voice_key);
-                if (f.llm_model[0]) SET(g_settings.llm_model, f.llm_model);
                 if (f.asr_model[0]) SET(g_settings.asr_model, f.asr_model);
                 if (f.tts_model[0]) SET(g_settings.tts_model, f.tts_model);
                 if (f.tts_voice[0]) SET(g_settings.tts_voice, f.tts_voice);
-                what = "语音设置已保存";
-            } else if (f.section == PORTAL_SEC_MORE) {
-                SET(g_settings.server, f.server);
+                if (f.tts_rate == VOICE_TTS_OFF || f.tts_rate == VOICE_TTS_16K || f.tts_rate == VOICE_TTS_24K) {
+                    g_settings.tts_rate = f.tts_rate;
+                }
+                what = "识别与朗读已保存";
+            } else if (f.section == PORTAL_SEC_HA) {
                 SET(g_settings.ha_url, f.ha_url);
                 if (f.ha_token[0]) SET(g_settings.ha_token, f.ha_token);
                 SET(g_settings.ha_entities, f.ha_entities);
+                what = "家庭助手已保存";
+            } else if (f.section == PORTAL_SEC_CAL) {
                 SET(g_settings.ics_url, f.ics_url);
+                what = "日历已保存";
+            } else if (f.section == PORTAL_SEC_SERVER) {
+                SET(g_settings.server, f.server);
+                what = "服务器地址已保存";
             }
 #undef SET
             settings_save();
