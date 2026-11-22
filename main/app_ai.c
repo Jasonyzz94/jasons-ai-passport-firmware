@@ -7,6 +7,7 @@
 #include "voice_cfg.h"
 #include "settings.h"
 #include "svc.h"
+#include "sys.h"
 #include "ui.h"
 
 #include <stdio.h>
@@ -34,6 +35,8 @@ static lv_obj_t *s_srv;
 static ai_state_t s_last_state = (ai_state_t)-1;
 static int64_t s_press_ms = -1;
 static bool s_talking;
+static bool s_verify_release;   // 收到过"松开"但电压显示还按着:由 tick 确认真正松手
+static int s_released_ticks;
 
 static lv_obj_t *bubble(lv_obj_t *parent, const char *text, bool mine)
 {
@@ -174,6 +177,19 @@ static void destroy(void)
     s_root = NULL;
 }
 
+// 真正松手:太短当作"重播上一条",否则发送。
+static void finish_press(void)
+{
+    s_talking = false;
+    s_verify_release = false;
+    if (sys_now_ms() - s_press_ms < SHORT_PRESS_MS) {
+        ai_cancel();                     // 太短:当作"重播上一条"
+        if (s_turn_count) ai_replay();
+    } else {
+        ai_talk_end();
+    }
+}
+
 static bool key(sys_key_t k, sys_key_ev_t ev)
 {
     const ai_state_t st = ai_state();
@@ -189,19 +205,21 @@ static bool key(sys_key_t k, sys_key_ev_t ev)
                 return true;
             }
             s_press_ms = sys_now_ms();
-            if (ai_talk_begin()) {   // 提示音在真正开始录音时响(见 tick)
+            if (ai_talk_begin()) {   // 提示音在真正开始录音前响(见 tick)
                 s_talking = true;
+                s_verify_release = false;
                 shell_keep_awake(true);
             }
             return true;
         }
         if (ev == SYS_EV_RELEASE && s_talking) {
-            s_talking = false;
-            if (sys_now_ms() - s_press_ms < SHORT_PRESS_MS) {
-                ai_cancel();                     // 太短:当作"重播上一条"
-                if (s_turn_count) ai_replay();
+            // 边录边传时 Wi-Fi 一直在发,按键电压会跳,偶尔被误判成松开,
+            // 表现为还没说话就结束录音、显示"没听清"。电压显示还按着就先不结束,交给 tick 确认。
+            if (sys_key_any_held()) {
+                s_verify_release = true;
+                s_released_ticks = 0;
             } else {
-                ai_talk_end();
+                finish_press();
             }
             return true;
         }
@@ -234,6 +252,11 @@ static bool key(sys_key_t k, sys_key_ev_t ev)
 static void tick(int64_t now)
 {
     (void)now;
+    if (s_talking && s_verify_release) {
+        // 连续 3 次(约 150ms)读到松开才算真的松手。
+        s_released_ticks = sys_key_any_held() ? 0 : s_released_ticks + 1;
+        if (s_released_ticks >= 3) finish_press();
+    }
     const ai_state_t st = ai_state();
     static srv_state_t last_srv = (srv_state_t)-1;
     const srv_state_t srv = relay_state();

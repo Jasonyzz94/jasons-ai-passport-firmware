@@ -103,6 +103,7 @@ void sys_kv_set_blob(const char *key, const void *buf, size_t len)
 void sys_kv_erase_all(void) { memset(s_kv, 0, sizeof(s_kv)); }
 
 uint32_t sys_random(void) { return (uint32_t)rand(); }
+bool sys_key_any_held(void) { return false; }
 void sys_mac(uint8_t mac[6])
 {
     const uint8_t m[6] = {0x34, 0x85, 0x18, 0x7A, 0xA3, 0xF2};

@@ -43,6 +43,44 @@ static bool s_last_direct; // 上一条回答来自云端直连(重播时用)
 static char s_q[160], s_a[640];
 static bool s_result_ready;
 static char s_audio_id[40];
+static bool s_turn_direct;       // 这一轮走云端直连
+static int64_t s_rec_ms;         // 这一轮实际录了多久
+static float s_rec_peak;         // 这一轮录音的最大音量(0..1)
+
+#define BEEP_WAIT_MS 300   // 提示音约 140ms,界面最多晚 50ms 才发出;录音时提示音会被静音
+
+// 先让界面响提示音,响完再开麦(录音期间提示音会被静音,免得录进去)。
+// 等待期间松手或取消返回 false。
+static void sink(const uint8_t *block, size_t len, void *user);
+static bool start_listening(void)
+{
+    s_state = AI_LISTENING;   // 界面看到 LISTENING 就响提示音
+    vTaskDelay(pdMS_TO_TICKS(BEEP_WAIT_MS));
+    if (s_cancel || s_end) return false;
+    xStreamBufferReset(s_stream);
+    s_rec_ms = 0;
+    s_rec_peak = 0;
+    return audio_capture_start(sink, NULL);
+}
+
+static void track_level(void)
+{
+    const float l = audio_input_level();
+    if (l > s_rec_peak) s_rec_peak = l;
+}
+
+// 服务器 / 识别说"没有话":带上录了多久、多大声,好分清是松手太快、麦克风没收音还是没识别出来。
+static void fail(const char *msg);
+static void fail_no_speech(void)
+{
+    char msg[64];
+    const int ds = (int)(s_rec_ms / 100);
+    const int vol = (int)(s_rec_peak * 100 + 0.5f);
+    if (s_rec_ms < 700) snprintf(msg, sizeof(msg), "只录了%d.%d秒,按住说完再松开", ds / 10, ds % 10);
+    else snprintf(msg, sizeof(msg), "没听清 录了%d.%d秒 音量%d%%", ds / 10, ds % 10, vol);
+    ESP_LOGW(TAG, "没有识别出话:录音 %lld ms,最大音量 %.2f", (long long)s_rec_ms, (double)s_rec_peak);
+    fail(msg);
+}
 
 ai_state_t ai_state(void) { return s_state; }
 const char *ai_error(void) { return s_error; }
@@ -166,16 +204,22 @@ static void talk(void)
 {
     esp_http_client_handle_t c = open_client("/api/assistant/talk", HTTP_METHOD_POST, 60000);
     if (!c) {
-        audio_capture_stop();
         fail("内存不足");
         return;
     }
     esp_http_client_set_header(c, "Content-Type", "application/octet-stream");
     esp_http_client_set_header(c, "X-Audio-Format", "ima-adpcm;rate=16000;block=256");
     if (esp_http_client_open(c, -1) != ESP_OK) {
-        audio_capture_stop();
         esp_http_client_cleanup(c);
         fail_stage("中转", VOICE_ERR_NET);
+        return;
+    }
+    if (!start_listening()) {   // 提示音还没响完就松手了
+        esp_http_client_close(c);
+        esp_http_client_cleanup(c);
+        if (s_cancel) s_state = AI_IDLE;
+        else if (s_end) fail("听到提示音后再说话");
+        else fail("麦克风不可用");
         return;
     }
     const int64_t started = sys_now_ms();
@@ -187,10 +231,13 @@ static void talk(void)
             ok = false;
             break;
         }
+        track_level();
         if (s_cancel) break;
         if (sys_now_ms() - started > MAX_TALK_MS) s_end = true;   // 最长 30 秒
+        if (!s_rec_ms && s_end) s_rec_ms = sys_now_ms() - started;
         if (s_end && !n && xStreamBufferIsEmpty(s_stream)) break;
     }
+    if (!s_rec_ms) s_rec_ms = sys_now_ms() - started;
     audio_capture_stop();
     if (s_cancel || !ok) {
         esp_http_client_close(c);
@@ -222,7 +269,7 @@ static void talk(void)
         const cJSON *e = cJSON_GetObjectItemCaseSensitive(j, "error");
         if (cJSON_IsString(e) && e->valuestring[0]) fail(e->valuestring);
         else if (status == 401) fail("中转未授权本设备");
-        else if (status == 422) fail("没听清,再说一次");
+        else if (status == 422) fail_no_speech();
         else fail_stage("中转", status > 0 ? status : VOICE_ERR_NET);
         cJSON_Delete(j);
         return;
@@ -335,13 +382,16 @@ static int direct_asr(char *text, size_t len)
     }
     // 录音缓冲(8KB)等握手完成再建:握手时内存峰值最高,不和它抢。
     if (!s_stream) s_stream = xStreamBufferCreate(STREAM_BYTES, 1);
-    if (s_stream) xStreamBufferReset(s_stream);
-    if (!s_stream || !audio_capture_start(sink, NULL)) {
+    if (!s_stream) {
         esp_http_client_close(c);
         esp_http_client_cleanup(c);
         return VOICE_ERR_MEM;
     }
-    s_state = AI_LISTENING;   // 界面此时响提示音:可以说话了
+    if (!start_listening()) {   // 提示音响完前松手 / 取消,或麦克风开不了
+        esp_http_client_close(c);
+        esp_http_client_cleanup(c);
+        return s_cancel ? ASR_CANCELLED : s_end ? ASR_EARLY : VOICE_ERR_MEM;
+    }
     const int64_t started = sys_now_ms();
     uint8_t blk[ADPCM_BLOCK_BYTES];
     size_t blk_fill = 0;   // 流缓冲是字节流:攒满一整块再解码
@@ -355,10 +405,13 @@ static int direct_asr(char *text, size_t len)
             ok = write_chunk(c, (const uint8_t *)pcm, (size_t)samples * 2);
             blk_fill = 0;
         }
+        track_level();
         if (s_cancel) break;
         if (sys_now_ms() - started > MAX_TALK_MS) s_end = true;
+        if (!s_rec_ms && s_end) s_rec_ms = sys_now_ms() - started;
         if (s_end && !n && xStreamBufferIsEmpty(s_stream)) break;
     }
+    if (!s_rec_ms) s_rec_ms = sys_now_ms() - started;
     audio_capture_stop();
     drop_stream();   // 对话和朗读还要各握手一次:把录音缓冲还回去
     static const char tail[] = "\r\n--" BOUNDARY "--\r\n";
@@ -574,6 +627,10 @@ static void direct_talk(void)
         fail("听到提示音后再说话");
         return;
     }
+    if (st == VOICE_ERR_EMPTY) {
+        fail_no_speech();
+        return;
+    }
     if (st != 200) {
         fail_stage("识别", st);
         return;
@@ -621,8 +678,10 @@ static void ai_task(void *arg)
             else if (s_last_direct) direct_speak(s_a);
             continue;
         }
-        if (s_state == AI_CONNECTING) direct_talk();
-        else if (s_state == AI_LISTENING) talk();
+        if (s_state == AI_CONNECTING) {
+            if (s_turn_direct) direct_talk();
+            else talk();
+        }
     }
 }
 
@@ -665,7 +724,7 @@ bool ai_talk_begin(void)
         fail("内存不足");
         return false;
     }
-    // 中转:松手前就在边录边传,缓冲现在就要。直连:识别接口连好后才建(见 direct_asr)。
+    // 中转:缓冲现在就建(局域网连接快)。直连:识别接口握手完成后才建(见 direct_asr)。
     if (!direct) {
         if (!s_stream) s_stream = xStreamBufferCreate(STREAM_BYTES, 1);
         if (!s_stream) {
@@ -678,15 +737,11 @@ bool ai_talk_begin(void)
     s_end = false;
     s_cancel = false;
     s_error[0] = '\0';
-    if (direct) {
-        s_state = AI_CONNECTING;   // 任务连好识别接口后自己开麦
-    } else {
-        s_state = AI_LISTENING;
-        if (!audio_capture_start(sink, NULL)) {
-            fail("麦克风不可用");
-            return false;
-        }
-    }
+    // 两种方式都先连好服务器,再响提示音、再开麦:开头的话不会丢,提示音也不会被录音静音掉。
+    s_turn_direct = direct;
+    s_rec_ms = 0;
+    s_rec_peak = 0;
+    s_state = AI_CONNECTING;
     xTaskNotifyGive(s_task);
     return true;
 }
