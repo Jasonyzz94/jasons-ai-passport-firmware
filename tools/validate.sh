@@ -142,6 +142,9 @@ run_static_checks() {
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/test_voice_cfg.c main/voice_cfg.c -o "${test_dir}/test_voice_cfg"
     "${test_dir}/test_voice_cfg"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_wifi_list.c main/wifi_list.c -o "${test_dir}/test_wifi_list"
+    "${test_dir}/test_wifi_list"
     for demo in audio low_power ble wifi; do
         "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
             -ffunction-sections -fdata-sections -Itests/demo_stubs -Imain \

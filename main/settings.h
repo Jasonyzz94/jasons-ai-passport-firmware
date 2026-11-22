@@ -10,8 +10,7 @@ typedef struct {
     int volume;              // 0..100
     int screen_timeout;      // 0..SETTINGS_TIMEOUT_COUNT-1
     int sound_feedback;      // 0/1 按键提示音
-    char wifi_ssid[33];
-    char wifi_pass[65];
+    // 无线网络不在这里:已保存的多个网络由 esp_net 管理(svc.h 的 net_saved_*)。
     char server[96];         // 中转服务器,例 "http://192.168.1.20:8787";空 = 自动发现
     char token[48];          // 服务器下发的设备令牌
     char tz[48];             // POSIX TZ,例 "CST-8"
@@ -48,4 +47,4 @@ void settings_factory_reset(void);
 
 int settings_timeout_ms(void);   // 0 表示永不息屏
 const char *settings_timeout_name(int idx);
-bool settings_has_wifi(void);
+bool settings_has_wifi(void);   // 至少保存了一个无线网络

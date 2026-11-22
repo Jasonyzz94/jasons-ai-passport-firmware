@@ -28,7 +28,7 @@ static bool s_dirty;
 static lv_obj_t *s_portal_status;
 static lv_obj_t *s_qr;
 static lv_obj_t *s_step;
-static portal_state_t s_last_portal = (portal_state_t)-1;
+static int s_last_portal = -1;
 
 // 关于页
 static lv_obj_t *s_about;
@@ -49,8 +49,11 @@ static const char *srv_text(void)
 static void list_values(void)
 {
     char buf[40];
-    if (settings_has_wifi()) {
-        snprintf(buf, sizeof(buf), "%s", g_settings.wifi_ssid);
+    if (net_state() == NET_CONNECTED) {
+        snprintf(buf, sizeof(buf), "%s", net_ssid());
+        ui_list_set_value(&s_list, ROW_WIFI, buf);
+    } else if (settings_has_wifi()) {
+        snprintf(buf, sizeof(buf), "已存 %d 个", net_saved_count());
         ui_list_set_value(&s_list, ROW_WIFI, buf);
     } else {
         ui_list_set_value(&s_list, ROW_WIFI, "未设置");
@@ -98,30 +101,34 @@ static void build_list(lv_obj_t *p)
 static void portal_render(void)
 {
     const portal_state_t st = net_portal_state();
-    if (st == s_last_portal) return;
-    s_last_portal = st;
+    const net_try_t tr = net_try_state();
+    const bool online = net_state() == NET_CONNECTED;
+    const int key = (int)st | (int)tr << 4 | (online ? 1 << 8 : 0);
+    if (key == s_last_portal) return;
+    s_last_portal = key;
     char qr[96];
-    switch (st) {
-    case PORTAL_CLIENT:
-        snprintf(qr, sizeof(qr), "http://192.168.4.1");
-        lv_label_set_text(s_step, "② 扫码打开配置页");
-        lv_label_set_text(s_portal_status, "手机已连上,填写家里的无线网络");
-        break;
-    case PORTAL_SAVED:
-        snprintf(qr, sizeof(qr), "http://192.168.4.1");
-        lv_label_set_text(s_step, "已保存");
-        lv_label_set_text_fmt(s_portal_status, "正在连接 %s …", g_settings.wifi_ssid);
-        break;
-    case PORTAL_FAILED:
+    snprintf(qr, sizeof(qr), "http://192.168.4.1");
+    if (st == PORTAL_FAILED) {
         snprintf(qr, sizeof(qr), "-");
         lv_label_set_text(s_step, "热点启动失败");
         lv_label_set_text(s_portal_status, "长▲ 返回后重试");
-        break;
-    default:
-        snprintf(qr, sizeof(qr), "WIFI:T:nopass;S:%s;;", net_portal_ssid());
+    } else if (tr == NET_TRY_RUNNING) {
+        lv_label_set_text(s_step, "正在连接");
+        lv_label_set_text_fmt(s_portal_status, "正在试连 %s …", net_try_ssid());
+    } else if (tr == NET_TRY_OK && online) {
+        lv_label_set_text(s_step, "已连接并保存");
+        lv_label_set_text_fmt(s_portal_status, "%s · 可继续在手机上设置", net_ssid());
+    } else if (tr == NET_TRY_FAILED) {
+        lv_label_set_text(s_step, "连接失败,没有保存");
+        lv_label_set_text_fmt(s_portal_status, "连不上 %s,%s", net_try_ssid(),
+                              settings_has_wifi() ? "已回到原来的网络" : "请在手机上检查密码");
+    } else if (st == PORTAL_CLIENT || st == PORTAL_SAVED) {
+        lv_label_set_text(s_step, "② 扫码打开配置页");
+        lv_label_set_text(s_portal_status, "手机已连上,在网页里设置");
+    } else {
+        snprintf(qr, sizeof(qr), "WIFI:T:WPA;S:%s;P:%s;;", net_portal_ssid(), net_portal_pass());
         lv_label_set_text(s_step, "① 手机扫码连接热点");
-        lv_label_set_text_fmt(s_portal_status, "或手动连接 %s", net_portal_ssid());
-        break;
+        lv_label_set_text_fmt(s_portal_status, "%s  密码 %s", net_portal_ssid(), net_portal_pass());
     }
 #if LV_USE_QRCODE
     lv_qrcode_update(s_qr, qr, strlen(qr));
@@ -145,10 +152,10 @@ static void build_portal(lv_obj_t *p)
     s_portal_status = ui_label_w(p, &ui_font_16, C_TEXT2, UI_W - 2 * UI_PAD, LV_TEXT_ALIGN_CENTER, "");
     lv_obj_set_pos(s_portal_status, UI_PAD, 198);
     lv_obj_t *tip = ui_label_w(p, &ui_font_14, C_TEXT3, UI_W - 2 * UI_PAD, LV_TEXT_ALIGN_CENTER,
-                               "网页里还有高级设置:云端密钥、天气、家居");
+                               "网页里每项单独保存 · 点\"完成配置\"关闭热点");
     lv_obj_set_pos(tip, UI_PAD, 226);
-    s_last_portal = (portal_state_t)-1;
-    shell_hints("长▲:取消返回");
+    s_last_portal = -1;
+    shell_hints("长▲:完成返回");
     shell_keep_awake(true);
     if (!net_portal_start()) shell_toast("热点启动失败");
     portal_render();
@@ -387,82 +394,64 @@ static void tick(int64_t now)
         static portal_form_t f;
         if (net_portal_take(&f)) {
 #define SET(dst, src) snprintf(dst, sizeof(dst), "%s", src)
-            // 名称没变且密码留空 = 沿用已保存的网络,不重新连接。
-            const bool same_ssid = !strcmp(f.ssid, g_settings.wifi_ssid);
-            const bool wifi_changed = f.ssid[0] != '\0' && (!same_ssid || f.pass[0] != '\0');
-            if (wifi_changed) {
-                SET(g_settings.wifi_ssid, f.ssid);
-                SET(g_settings.wifi_pass, f.pass);
+            // 只改提交的那个分区:其他分区的字段在这次表单里是空的,不能拿来覆盖。
+            const char *what = "已保存";
+            if (f.section == PORTAL_SEC_WEATHER) {
+                SET(g_settings.city, f.city);
+                SET(g_settings.lat, f.lat);
+                SET(g_settings.lon, f.lon);
+                what = "天气位置已保存";
+            } else if (f.section == PORTAL_SEC_VOICE) {
+                // 密钥绑定接口:换了接口地址却没填新密钥,就清掉旧密钥,不发给别家。
+                if (f.clear_keys) {
+                    g_settings.api_key[0] = '\0';
+                    g_settings.voice_key[0] = '\0';
+                }
+                if (f.ai_mode >= VOICE_MODE_AUTO && f.ai_mode <= VOICE_MODE_DIRECT) g_settings.ai_mode = f.ai_mode;
+                if (f.tts_rate == VOICE_TTS_OFF || f.tts_rate == VOICE_TTS_16K || f.tts_rate == VOICE_TTS_24K) {
+                    g_settings.tts_rate = f.tts_rate;
+                }
+                if (f.api_base[0] && strcmp(f.api_base, g_settings.api_base) != 0) {
+                    SET(g_settings.api_base, f.api_base);
+                    if (!f.api_key[0]) g_settings.api_key[0] = '\0';
+                }
+                if (f.api_key[0]) SET(g_settings.api_key, f.api_key);
+                if (strcmp(f.voice_base, g_settings.voice_base) != 0) {   // 语音接口可以清空(= 同对话)
+                    SET(g_settings.voice_base, f.voice_base);
+                    if (!f.voice_key[0]) g_settings.voice_key[0] = '\0';
+                }
+                if (f.voice_key[0]) SET(g_settings.voice_key, f.voice_key);
+                if (f.llm_model[0]) SET(g_settings.llm_model, f.llm_model);
+                if (f.asr_model[0]) SET(g_settings.asr_model, f.asr_model);
+                if (f.tts_model[0]) SET(g_settings.tts_model, f.tts_model);
+                if (f.tts_voice[0]) SET(g_settings.tts_voice, f.tts_voice);
+                what = "语音设置已保存";
+            } else if (f.section == PORTAL_SEC_MORE) {
+                SET(g_settings.server, f.server);
+                SET(g_settings.ha_url, f.ha_url);
+                if (f.ha_token[0]) SET(g_settings.ha_token, f.ha_token);
+                SET(g_settings.ha_entities, f.ha_entities);
+                SET(g_settings.ics_url, f.ics_url);
             }
-            // 普通字段:提交什么就存什么(清空也生效);密钥类字段留空表示不修改。
-            SET(g_settings.server, f.server);
-            // 语音助手。密钥绑定接口:换了接口地址却没填新密钥,就清掉旧密钥,不发给别家。
-            if (f.clear_keys) {
-                g_settings.api_key[0] = '\0';
-                g_settings.voice_key[0] = '\0';
-            }
-            if (f.ai_mode >= VOICE_MODE_AUTO && f.ai_mode <= VOICE_MODE_DIRECT) g_settings.ai_mode = f.ai_mode;
-            if (f.tts_rate == VOICE_TTS_OFF || f.tts_rate == VOICE_TTS_16K || f.tts_rate == VOICE_TTS_24K) {
-                g_settings.tts_rate = f.tts_rate;
-            }
-            if (f.api_base[0] && strcmp(f.api_base, g_settings.api_base) != 0) {
-                SET(g_settings.api_base, f.api_base);
-                if (!f.api_key[0]) g_settings.api_key[0] = '\0';
-            }
-            if (f.api_key[0]) SET(g_settings.api_key, f.api_key);
-            if (strcmp(f.voice_base, g_settings.voice_base) != 0) {   // 语音接口可以清空(= 同对话)
-                SET(g_settings.voice_base, f.voice_base);
-                if (!f.voice_key[0]) g_settings.voice_key[0] = '\0';
-            }
-            if (f.voice_key[0]) SET(g_settings.voice_key, f.voice_key);
-            if (f.llm_model[0]) SET(g_settings.llm_model, f.llm_model);
-            if (f.asr_model[0]) SET(g_settings.asr_model, f.asr_model);
-            if (f.tts_model[0]) SET(g_settings.tts_model, f.tts_model);
-            if (f.tts_voice[0]) SET(g_settings.tts_voice, f.tts_voice);
-            SET(g_settings.city, f.city);
-            SET(g_settings.lat, f.lat);
-            SET(g_settings.lon, f.lon);
-            SET(g_settings.ha_url, f.ha_url);
-            if (f.ha_token[0]) SET(g_settings.ha_token, f.ha_token);
-            SET(g_settings.ha_entities, f.ha_entities);
-            SET(g_settings.ics_url, f.ics_url);
 #undef SET
             settings_save();
-            if (wifi_changed) {
-                net_reconnect();
-            } else {
-                leave_portal();
-                shell_toast("高级设置已保存");
-                build(PAGE_LIST);
-                return;
-            }
+            net_portal_ack(f.seq);   // 写完存储再告诉网页
+            shell_toast(what);
+        }
+        if (net_portal_done()) {
+            leave_portal();
+            shell_toast(net_state() == NET_CONNECTED ? "设置完成,已联网" : "设置完成");
+            build(PAGE_LIST);
+            return;
         }
         portal_render();
-        // 连上后多留 6 秒热点,让手机网页能看到"连接成功";密码错误时提示并允许重新提交。
-        static int64_t s_connected_at;
-        static bool s_fail_shown;
-        if (net_portal_state() == PORTAL_SAVED && net_state() == NET_CONNECTED) {
-            if (!s_connected_at) {
-                s_connected_at = now;
-                audio_beep(BEEP_OK);
-                lv_label_set_text(s_step, "连接成功");
-                lv_label_set_text_fmt(s_portal_status, "地址 %s,马上返回", net_ip());
-            } else if (now - s_connected_at > 6000) {
-                s_connected_at = 0;
-                leave_portal();
-                shell_toast("无线网络已连接");
-                build(PAGE_LIST);
-            }
-        } else if (net_portal_state() == PORTAL_SAVED && net_state() == NET_FAILED) {
-            if (!s_fail_shown) {
-                s_fail_shown = true;
-                audio_beep(BEEP_ERR);
-                lv_label_set_text(s_step, "连接失败");
-                lv_label_set_text_fmt(s_portal_status, "连不上 %s,请在手机上改密码后重新保存",
-                                      g_settings.wifi_ssid);
-            }
-        } else {
-            s_fail_shown = false;
+        // 试连结果给一声提示
+        static net_try_t s_last_try;
+        const net_try_t tr = net_try_state();
+        if (tr != s_last_try) {
+            if (tr == NET_TRY_OK) audio_beep(BEEP_OK);
+            else if (tr == NET_TRY_FAILED) audio_beep(BEEP_ERR);
+            s_last_try = tr;
         }
     } else if (now - last > 1000) {
         last = now;

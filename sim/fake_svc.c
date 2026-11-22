@@ -67,6 +67,19 @@ void net_portal_stop(void) {}
 portal_state_t net_portal_state(void) { return g_fake.portal; }
 const char *net_portal_ssid(void) { return "Passport-A3F2"; }
 bool net_portal_take(portal_form_t *f) { (void)f; return false; }
+void net_portal_ack(uint32_t seq) { (void)seq; }
+bool net_portal_done(void) { return false; }
+const char *net_portal_pass(void) { return "52813064"; }
+int net_saved_count(void) { return 2; }
+bool net_saved_get(int i, char *ssid, size_t len)
+{
+    static const char *const names[] = {"Jason-Home-5G", "Office"};
+    if (i < 0 || i > 1) return false;
+    snprintf(ssid, len, "%s", names[i]);
+    return true;
+}
+net_try_t net_try_state(void) { return NET_TRY_NONE; }
+const char *net_try_ssid(void) { return ""; }
 
 // ---- 中转服务器 ----
 srv_state_t relay_state(void) { return g_fake.srv; }
@@ -258,3 +271,5 @@ bool ai_take_result(char *q, size_t ql, char *a, size_t al)
     return true;
 }
 void ai_replay(void) {}
+bool ai_cancelling(void) { return false; }
+void ai_clear_history(void) {}

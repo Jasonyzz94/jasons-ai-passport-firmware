@@ -1,6 +1,7 @@
 // main/settings.c —— 全局设置持久化。
 #include "settings.h"
 
+#include "svc.h"
 #include "sys.h"
 #include "voice_cfg.h"
 #include <stdio.h>
@@ -51,8 +52,6 @@ void settings_load(void)
     g_settings.screen_timeout = clampi(sys_kv_get_i32("timeout", g_settings.screen_timeout),
                                        0, SETTINGS_TIMEOUT_COUNT - 1);
     g_settings.sound_feedback = sys_kv_get_i32("click", 1) ? 1 : 0;
-    sys_kv_get_str("ssid", g_settings.wifi_ssid, sizeof(g_settings.wifi_ssid));
-    sys_kv_get_str("pass", g_settings.wifi_pass, sizeof(g_settings.wifi_pass));
     sys_kv_get_str("server", g_settings.server, sizeof(g_settings.server));
     sys_kv_get_str("token", g_settings.token, sizeof(g_settings.token));
     char buf[48];
@@ -88,8 +87,6 @@ void settings_save(void)
     sys_kv_set_i32("volume", g_settings.volume);
     sys_kv_set_i32("timeout", g_settings.screen_timeout);
     sys_kv_set_i32("click", g_settings.sound_feedback);
-    sys_kv_set_str("ssid", g_settings.wifi_ssid);
-    sys_kv_set_str("pass", g_settings.wifi_pass);
     sys_kv_set_str("server", g_settings.server);
     sys_kv_set_str("token", g_settings.token);
     sys_kv_set_str("tz", g_settings.tz);
@@ -126,4 +123,4 @@ const char *settings_timeout_name(int idx)
     return k_timeout_names[clampi(idx, 0, SETTINGS_TIMEOUT_COUNT - 1)];
 }
 
-bool settings_has_wifi(void) { return g_settings.wifi_ssid[0] != '\0'; }
+bool settings_has_wifi(void) { return net_saved_count() > 0; }

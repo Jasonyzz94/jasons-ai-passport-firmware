@@ -66,10 +66,28 @@ bool net_portal_start(void);
 void net_portal_stop(void);
 portal_state_t net_portal_state(void);
 const char *net_portal_ssid(void);   // 例 "Passport-A3F2"
-// 手机在配置页提交的内容。空字段表示未填写(密钥类字段留空 = 不修改)。
+const char *net_portal_pass(void);   // 热点密码(每次开热点随机 8 位数字)
+// 手机上点了"完成配置"(只返回一次 true)。
+bool net_portal_done(void);
+
+// 已保存的无线网络:最多 NET_SAVED_MAX 个,第 0 个是最近连上的。
+// 连不上当前网络时会自动换下一个已保存的(先试扫描里看得到的)。
+#define NET_SAVED_MAX 5
+int net_saved_count(void);
+bool net_saved_get(int i, char *ssid, size_t len);
+// 手机上提交新网络后的试连:连上才保存,连不上就回到原来的网络。
+typedef enum { NET_TRY_NONE = 0, NET_TRY_RUNNING, NET_TRY_OK, NET_TRY_FAILED } net_try_t;
+net_try_t net_try_state(void);
+const char *net_try_ssid(void);
+
+// 手机在配置页按分区提交的内容(无线网络由 esp_net 自己处理,不经过这里)。
+// 只有本分区的字段有意义;空字段表示未填写(密钥类字段留空 = 不修改)。
+typedef enum { PORTAL_SEC_WEATHER = 1, PORTAL_SEC_VOICE, PORTAL_SEC_MORE } portal_sec_t;
 typedef struct {
     bool valid;
-    char ssid[33], pass[65], server[96];
+    portal_sec_t section;
+    uint32_t seq;            // 应用并保存后用 net_portal_ack(seq) 告诉网页
+    char server[96];
     int ai_mode, tts_rate;   // -1 = 表单里没有这一项
     bool clear_keys;         // 勾选了"清除已保存的密钥"
     char api_base[80], api_key[168], llm_model[48];
@@ -80,6 +98,8 @@ typedef struct {
 } portal_form_t;
 // 提交后返回 true 并拷出内容(只返回一次)。
 bool net_portal_take(portal_form_t *out);
+// 已把 seq 这次提交写入存储(网页据此显示"已保存")。
+void net_portal_ack(uint32_t seq);
 
 // ===========================================================================
 // 中转服务器(Mac mini)
