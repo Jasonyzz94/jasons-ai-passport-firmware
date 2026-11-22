@@ -2,8 +2,9 @@
 //
 // 界面和 Wi-Fi / 蓝牙 / HTTPS 共用一个堆。以前内存被网络挤光时,LVGL 申请失败会在断言里
 // 死循环,表现就是"打开天气 / 信息看板时卡死"。这里留一块 16KB 的应急储备:
-// 界面申请失败时先释放储备再试一次,保证界面能继续画;联网代码看到储备被动用就不再发起
-// HTTPS 请求(local_tls_ok)。内存回升后自动补回储备。
+// 界面申请失败时先释放储备再试一次,保证界面能继续画;联网代码看到储备被界面动用、
+// 且还没补回时,就不再发起 HTTPS 请求(local_tls_ok)。内存回升后补回储备:
+// 界面释放内存时、蓝牙关闭时、以及每次准备发起 HTTPS 请求时都会尝试。
 #include "lvgl.h"
 #include "src/stdlib/lv_mem.h"
 
@@ -59,6 +60,8 @@ void lv_mem_reserve_suspend(bool on)
     if (on) {
         free(take_reserve());
         ESP_LOGI(TAG, "让出应急储备(空闲 %u)", (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT));
+    } else {
+        refill();   // 蓝牙关了:不必等界面下一次释放内存
     }
 }
 
@@ -73,7 +76,14 @@ static bool release_reserve(size_t want)
     return true;
 }
 
-bool lv_mem_reserve_ok(void) { return s_reserve != NULL; }
+// 界面是否在靠应急储备撑着(储备被界面用掉且还没补回)。
+// 储备只是因为蓝牙让出、或内存还没回到补回线时,不算界面紧张:
+// 以前这两种情况也会拦下所有 HTTPS 请求,语音助手一直显示"识别:内存不足"。
+bool lv_mem_reserve_ok(void)
+{
+    if (!s_reserve) refill();
+    return s_reserve != NULL || !s_used_reserve;
+}
 
 void lv_mem_init(void) { s_reserve = malloc(RESERVE_BYTES); }
 void lv_mem_deinit(void) {}

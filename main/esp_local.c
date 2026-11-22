@@ -57,15 +57,29 @@ static esp_err_t on_data(esp_http_client_event_t *e)
 // 所以内存不够时宁可这次不取,也不冒险。
 bool lv_mem_reserve_ok(void);
 
+static unsigned s_tls_free_k, s_tls_largest_k;
+static bool s_tls_ui_tight;
+
+void local_tls_last(unsigned *free_k, unsigned *largest_k, bool *ui_tight)
+{
+    *free_k = s_tls_free_k;
+    *largest_k = s_tls_largest_k;
+    *ui_tight = s_tls_ui_tight;
+}
+
 bool local_tls_ok(void)
 {
-    if (!lv_mem_reserve_ok()) {   // 界面已经在用应急内存:先别联网抢内存
-        ESP_LOGW(TAG, "界面内存紧张,跳过加密请求");
-        return false;
-    }
+    const bool ui_ok = lv_mem_reserve_ok();   // 先让储备有机会补回,再看剩多少
     const size_t free_now = heap_caps_get_free_size(MALLOC_CAP_8BIT);
     const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-    if (free_now >= 48 * 1024 && largest >= 18 * 1024) return true;
+    s_tls_free_k = (unsigned)(free_now / 1024);
+    s_tls_largest_k = (unsigned)(largest / 1024);
+    s_tls_ui_tight = !ui_ok;
+    if (!ui_ok) {   // 界面已经在用应急内存:先别联网抢内存
+        ESP_LOGW(TAG, "界面内存紧张,跳过加密请求(空闲 %u,最大块 %u)", (unsigned)free_now, (unsigned)largest);
+        return false;
+    }
+    if (free_now >= TLS_MIN_FREE && largest >= TLS_MIN_BLOCK) return true;
     ESP_LOGW(TAG, "内存不足,跳过加密请求(空闲 %u,最大块 %u)", (unsigned)free_now, (unsigned)largest);
     return false;
 }

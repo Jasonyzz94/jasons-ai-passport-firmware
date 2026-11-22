@@ -13,6 +13,10 @@ bool relay_task_running(void);
 bool relay_discovery_attempted(void);
 // 当前空闲内存是否够做一次 HTTPS 握手(不够时跳过请求,避免界面因内存耗尽卡死)。
 bool local_tls_ok(void);
+#define TLS_MIN_FREE (48 * 1024)    // 握手前至少要这么多空闲
+#define TLS_MIN_BLOCK (18 * 1024)   // 且最大连续块不小于这个
+// 最近一次 local_tls_ok 看到的空闲 / 最大块(KB),以及是否因界面在用应急储备而拒绝。
+void local_tls_last(unsigned *free_k, unsigned *largest_k, bool *ui_tight);
 // 蓝牙是否正在启动或关闭(过渡中)。Wi-Fi 启动前等它结束。
 bool ble_radio_busy(void);
 // 蓝牙启动 / 运行期间让出界面的应急内存储备(esp_lv_mem.c)。

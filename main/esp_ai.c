@@ -57,8 +57,25 @@ static void fail(const char *msg)
 static void fail_stage(const char *stage, int status)
 {
     char msg[64];
-    voice_error_text(msg, sizeof(msg), stage, status);
+    if (status == VOICE_ERR_MEM) {
+        // 内存不足时带上加密连接前看到的数字,方便判断是哪里占了内存。
+        unsigned free_k, largest_k;
+        bool ui_tight;
+        local_tls_last(&free_k, &largest_k, &ui_tight);
+        if (ui_tight) snprintf(msg, sizeof(msg), "%s:界面内存紧张", stage);
+        else snprintf(msg, sizeof(msg), "%s:内存不足 空闲%uK 最大%uK", stage, free_k, largest_k);
+    } else {
+        voice_error_text(msg, sizeof(msg), stage, status);
+    }
     fail(msg);
+}
+
+// 只在麦克风停下后调用(audio_capture_stop 会等回调走完)。
+static void drop_stream(void)
+{
+    StreamBufferHandle_t st = s_stream;
+    s_stream = NULL;
+    if (st) vStreamBufferDelete(st);
 }
 
 static void sink(const uint8_t *block, size_t len, void *user)
@@ -312,8 +329,10 @@ static int direct_asr(char *text, size_t len)
         esp_http_client_cleanup(c);
         return !ok ? VOICE_ERR_NET : s_cancel ? ASR_CANCELLED : ASR_EARLY;
     }
-    xStreamBufferReset(s_stream);
-    if (!audio_capture_start(sink, NULL)) {
+    // 录音缓冲(8KB)等握手完成再建:握手时内存峰值最高,不和它抢。
+    if (!s_stream) s_stream = xStreamBufferCreate(STREAM_BYTES, 1);
+    if (s_stream) xStreamBufferReset(s_stream);
+    if (!s_stream || !audio_capture_start(sink, NULL)) {
         esp_http_client_close(c);
         esp_http_client_cleanup(c);
         return VOICE_ERR_MEM;
@@ -337,6 +356,7 @@ static int direct_asr(char *text, size_t len)
         if (s_end && !n && xStreamBufferIsEmpty(s_stream)) break;
     }
     audio_capture_stop();
+    drop_stream();   // 对话和朗读还要各握手一次:把录音缓冲还回去
     static const char tail[] = "\r\n--" BOUNDARY "--\r\n";
     if (ok && !s_cancel) ok = write_chunk(c, (const uint8_t *)tail, sizeof(tail) - 1) && write_chunk(c, NULL, 0);
     int status = s_cancel ? ASR_CANCELLED : VOICE_ERR_UPLOAD;
@@ -584,9 +604,7 @@ static void ai_task(void *arg)
     for (;;) {
         if (s_quit) {
             audio_capture_stop();
-            StreamBufferHandle_t st = s_stream;
-            s_stream = NULL;
-            if (st) vStreamBufferDelete(st);
+            drop_stream();
             ESP_LOGI(TAG, "语音助手已释放(空闲 %u)", (unsigned)sys_free_heap());
             s_task = NULL;
             vTaskDelete(NULL);
@@ -638,18 +656,21 @@ bool ai_talk_begin(void)
     }
     s_quit = false;
     if (!s_lock) s_lock = xSemaphoreCreateMutex();
-    if (!s_task) {
-        s_stream = xStreamBufferCreate(STREAM_BYTES, 1);
-        if (!s_stream || xTaskCreate(ai_task, "ai", 6144, NULL, 5, &s_task) != pdPASS) {
-            if (s_stream) vStreamBufferDelete(s_stream);
-            s_stream = NULL;
-            s_task = NULL;
+    if (s_state != AI_IDLE && s_state != AI_ERROR) return false;
+    if (!s_task && xTaskCreate(ai_task, "ai", 6144, NULL, 5, &s_task) != pdPASS) {
+        s_task = NULL;
+        fail("内存不足");
+        return false;
+    }
+    // 中转:松手前就在边录边传,缓冲现在就要。直连:识别接口连好后才建(见 direct_asr)。
+    if (!direct) {
+        if (!s_stream) s_stream = xStreamBufferCreate(STREAM_BYTES, 1);
+        if (!s_stream) {
             fail("内存不足");
             return false;
         }
+        xStreamBufferReset(s_stream);
     }
-    if (s_state != AI_IDLE && s_state != AI_ERROR) return false;
-    xStreamBufferReset(s_stream);
     audio_play_flush();
     s_end = false;
     s_cancel = false;
