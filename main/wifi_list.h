@@ -29,7 +29,7 @@ int wifi_list_find(const wifi_list_t *l, const char *ssid);
 // 加入或更新密码,并移到最前。返回 true 表示因为列表满挤掉了一个(evicted 可为 NULL)。
 bool wifi_list_promote(wifi_list_t *l, const char *ssid, const char *pass, char evicted[33]);
 bool wifi_list_remove(wifi_list_t *l, const char *ssid);
-// 连不上下标 after 的网络时,下一个该试的下标;都试过了返回 -1。
-// visible 是最近扫描到的网络名(nvis 为 0 表示没有扫描结果,这时按顺序全都试):
-// 先试扫描里能看到的,看不到的排在后面。
-int wifi_list_next(const wifi_list_t *l, int after, const char *const *visible, int nvis);
+// 这一轮下一个该试的下标;tried 是这一轮已经试过的下标位图(bit i = n[i]),都试过了返回 -1。
+// visible 是最近扫描到的网络名(nvis 为 0 表示没有扫描结果,这时按列表顺序):
+// 先试扫描里能看到的,看不到的排在后面;同一组里按列表顺序(最近连上的在前)。
+int wifi_list_next(const wifi_list_t *l, uint32_t tried, const char *const *visible, int nvis);

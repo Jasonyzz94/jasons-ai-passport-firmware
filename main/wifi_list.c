@@ -73,19 +73,16 @@ static bool seen(const char *ssid, const char *const *visible, int nvis)
     return false;
 }
 
-// 尝试顺序:先按列表顺序排能看到的,再排看不到的。after 在这个顺序里的下一个就是答案。
-int wifi_list_next(const wifi_list_t *l, int after, const char *const *visible, int nvis)
+// 以前按"当前这个的下一个"取:开机总是先连 n[0],它排在"看得到的"后面时,
+// 排在它前面的网络(恰恰是看得到的那个)整轮都不会被试到。现在记下这一轮试过哪些。
+int wifi_list_next(const wifi_list_t *l, uint32_t tried, const char *const *visible, int nvis)
 {
-    int order[WIFI_SAVED_MAX], n = 0;
     for (int pass = 0; pass < 2; pass++) {
         for (int i = 0; i < l->count; i++) {
+            if (tried & (1u << i)) continue;
             const bool v = nvis == 0 || seen(l->n[i].ssid, visible, nvis);
-            if (v == (pass == 0)) order[n++] = i;
+            if (v == (pass == 0)) return i;
         }
     }
-    if (after < 0) return n ? order[0] : -1;
-    for (int k = 0; k < n; k++) {
-        if (order[k] == after) return k + 1 < n ? order[k + 1] : -1;
-    }
-    return n ? order[0] : -1;
+    return -1;
 }

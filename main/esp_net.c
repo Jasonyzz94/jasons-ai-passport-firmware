@@ -69,6 +69,7 @@ static int s_ap_count;
 // 已保存的网络与试连状态,都受 s_lock 保护;只在 net 任务里改列表和写存储。
 static wifi_list_t s_saved;
 static int s_cur = -1;                 // 正在用的已保存网络下标
+static uint32_t s_tried;               // 这一轮已经试过的已保存网络(位图),连上或一轮结束时清零
 static bool s_trial_on;                // 正在试连 s_trial(还没保存)
 static wifi_cred_t s_trial;
 static volatile net_try_t s_try = NET_TRY_NONE;
@@ -236,9 +237,31 @@ static void on_got_ip(void)
         dirty = true;
     }
     s_cur = 0;
+    s_tried = 0;
     xSemaphoreGive(s_lock);
     if (evicted[0]) ESP_LOGI(TAG, "已保存的网络满了,移除最久没用的 %s", evicted);
     if (dirty) saved_persist();
+}
+
+// 换网络前重新扫一次附近的网络(最多约 4 秒),按真正看得到的排序;
+// 以前用的是上一次扫描(可能是在别处、很久以前),顺序会错。结果由 SCAN_DONE 事件写入 s_aps。
+static void refresh_scan(void)
+{
+    if (!s_wifi_started) return;
+    s_scan = SCAN_RUNNING;
+    if (esp_wifi_scan_start(NULL, false) != ESP_OK) {
+        s_scan = SCAN_FAILED;
+        return;
+    }
+    for (int i = 0; i < 80 && s_scan == SCAN_RUNNING; i++) vTaskDelay(pdMS_TO_TICKS(50));
+}
+
+// 这一轮下一个要试的网络(调用时持有 s_lock)。
+static int pick_next_locked(void)
+{
+    const char *vis[NET_SCAN_MAX];
+    for (int i = 0; i < s_ap_count; i++) vis[i] = s_aps[i].ssid;
+    return wifi_list_next(&s_saved, s_tried, vis, s_ap_count);
 }
 
 // 当前网络连不上。返回 true 表示换了一个网络并已开始连接。
@@ -250,6 +273,7 @@ static bool fallback(void)
         s_trial_on = false;
         s_try = NET_TRY_FAILED;
         s_cur = -1;
+        s_tried = 0;
         const bool any = s_saved.count > 0;
         xSemaphoreGive(s_lock);
         ESP_LOGW(TAG, "试连 %s 失败,回到已保存的网络", s_try_ssid);
@@ -259,13 +283,22 @@ static bool fallback(void)
         apply();
         return true;
     }
-    const char *vis[NET_SCAN_MAX];
-    for (int i = 0; i < s_ap_count; i++) vis[i] = s_aps[i].ssid;
-    const int next = wifi_list_next(&s_saved, s_cur, vis, s_ap_count);
-    s_cur = next;   // -1:这一轮都试过了,30 秒后从头再来
+    const bool more = pick_next_locked() >= 0;
+    xSemaphoreGive(s_lock);
+    if (!more) {   // 这一轮都试过了:30 秒后从头再来(先试看得到的)
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        s_tried = 0;
+        s_cur = -1;
+        xSemaphoreGive(s_lock);
+        return false;
+    }
+    refresh_scan();
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    const int next = pick_next_locked();
+    s_cur = next;
+    if (next >= 0) ESP_LOGI(TAG, "换下一个已保存的网络 %s", s_saved.n[next].ssid);
     xSemaphoreGive(s_lock);
     if (next < 0) return false;
-    ESP_LOGI(TAG, "换下一个已保存的网络");
     s_retries = 0;
     s_state = NET_OFF;
     apply();
@@ -327,6 +360,9 @@ static void wifi_stop(void)
     s_state = NET_OFF;
     s_ip[0] = '\0';
     s_scan = SCAN_IDLE;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_tried = 0;   // 下次开射频是新的一轮;s_cur 不变,先试上次连上的
+    xSemaphoreGive(s_lock);
 }
 
 static void sta_connect(void)
@@ -337,7 +373,14 @@ static void sta_connect(void)
     if (s_trial_on) {
         c = s_trial;
     } else if (s_saved.count) {
-        if (s_cur < 0 || s_cur >= s_saved.count) s_cur = 0;
+        if (s_cur < 0 || s_cur >= s_saved.count) {
+            s_cur = pick_next_locked();   // 新一轮:先试看得到的,同组里最近连上的优先
+            if (s_cur < 0) {
+                s_tried = 0;
+                s_cur = pick_next_locked();
+            }
+        }
+        s_tried |= 1u << s_cur;
         c = s_saved.n[s_cur];
     } else {
         have = false;
@@ -1114,6 +1157,7 @@ static void net_task(void *arg)
                 xSemaphoreTake(s_lock, portMAX_DELAY);
                 const bool removed = wifi_list_remove(&s_saved, s_forget);
                 s_cur = wifi_list_find(&s_saved, s_ssid);   // 下标变了:重新对上当前网络
+                s_tried = 0;
                 xSemaphoreGive(s_lock);
                 if (removed) {
                     ESP_LOGI(TAG, "已忘记 %s", s_forget);
