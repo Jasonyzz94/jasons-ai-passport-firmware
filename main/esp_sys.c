@@ -81,25 +81,6 @@ esp_err_t sys_esp_init(void)
     return btn_err;
 }
 
-bool sys_key_any_held(void)
-{
-    int v[5];
-    for (int i = 0; i < 5; i++) {
-        v[i] = bsp_button_read_mv();
-        if (v[i] < 0) return false;
-    }
-    for (int i = 1; i < 5; i++) {   // 插入排序取中位数
-        const int x = v[i];
-        int j = i - 1;
-        while (j >= 0 && v[j] > x) {
-            v[j + 1] = v[j];
-            j--;
-        }
-        v[j + 1] = x;
-    }
-    return v[2] < BSP_BTN_MV_RELEASED_MIN;
-}
-
 bool sys_key_pop(sys_key_t *key, sys_key_ev_t *ev)
 {
     key_msg_t m;

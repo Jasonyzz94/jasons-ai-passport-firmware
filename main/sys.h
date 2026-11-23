@@ -27,9 +27,6 @@ typedef enum {
 
 // 按键事件队列:按键回调(其他任务)入队,shell 在 LVGL 任务里出队。
 bool sys_key_pop(sys_key_t *key, sys_key_ev_t *ev);
-// 直接读按键电压确认现在是否还有键按着(多次读数取中位数)。读不出来时返回 false。
-// 用来核实"松开"事件:Wi-Fi 发送时按键电压会跳,偶尔会被误判成松开。
-bool sys_key_any_held(void);
 
 // 单调毫秒时钟(开机起算)。
 int64_t sys_now_ms(void);

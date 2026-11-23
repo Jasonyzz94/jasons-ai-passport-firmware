@@ -35,8 +35,10 @@ static lv_obj_t *s_srv;
 static ai_state_t s_last_state = (ai_state_t)-1;
 static int64_t s_press_ms = -1;
 static bool s_talking;
-static bool s_verify_release;   // 收到过"松开"但电压显示还按着:由 tick 确认真正松手
-static int s_released_ticks;
+// 收到"松开"的时间;0 = 没有待确认的松开。松开后 RELEASE_CONFIRM_MS 内又按下 = 瞬间误判,继续录。
+// (以前改成读按键电压来核实,但边录边传时 Wi-Fi 把电压读数拉低,真松手也读成"按着",录音停不下来。)
+#define RELEASE_CONFIRM_MS 300
+static int64_t s_release_at;
 
 static lv_obj_t *bubble(lv_obj_t *parent, const char *text, bool mine)
 {
@@ -156,6 +158,7 @@ static void create(lv_obj_t *root)
     s_last_state = (ai_state_t)-1;
     s_talking = false;
     s_press_ms = -1;
+    s_release_at = 0;
 
     lv_obj_t *t = ui_label(root, &ui_font_20b, C_TEXT, "语音助手");
     lv_obj_set_pos(t, UI_PAD + 4, 4);
@@ -186,12 +189,13 @@ static void destroy(void)
     s_root = NULL;
 }
 
-// 真正松手:太短当作"重播上一条",否则发送。
+// 真正松手:太短当作"重播上一条",否则发送。按住时长按松开那一刻算。
 static void finish_press(void)
 {
+    const int64_t held = s_release_at - s_press_ms;
     s_talking = false;
-    s_verify_release = false;
-    if (sys_now_ms() - s_press_ms < SHORT_PRESS_MS) {
+    s_release_at = 0;
+    if (held < SHORT_PRESS_MS) {
         ai_cancel();                     // 太短:当作"重播上一条"
         if (s_turn_count) ai_replay();
     } else {
@@ -203,6 +207,10 @@ static bool key(sys_key_t k, sys_key_ev_t ev)
 {
     const ai_state_t st = ai_state();
     if (k == SYS_KEY_OK) {
+        if (ev == SYS_EV_PRESS && s_talking && s_release_at) {
+            s_release_at = 0;   // 刚才的松开只是一瞬间的误判:接着录
+            return true;
+        }
         if (ev == SYS_EV_PRESS && ai_cancelling()) {
             shell_toast("正在结束上一条,稍等");
             return true;
@@ -216,20 +224,15 @@ static bool key(sys_key_t k, sys_key_ev_t ev)
             s_press_ms = sys_now_ms();
             if (ai_talk_begin()) {   // 提示音在真正开始录音前响(见 tick)
                 s_talking = true;
-                s_verify_release = false;
+                s_release_at = 0;
                 shell_keep_awake(true);
             }
             return true;
         }
         if (ev == SYS_EV_RELEASE && s_talking) {
-            // 边录边传时 Wi-Fi 一直在发,按键电压会跳,偶尔被误判成松开,
-            // 表现为还没说话就结束录音、显示"没听清"。电压显示还按着就先不结束,交给 tick 确认。
-            if (sys_key_any_held()) {
-                s_verify_release = true;
-                s_released_ticks = 0;
-            } else {
-                finish_press();
-            }
+            // 边录边传时 Wi-Fi 一直在发,按键读数偶尔会跳一下被当成松开。先记下,
+            // RELEASE_CONFIRM_MS 内没有再按下才算真松手(见 tick)。
+            if (!s_release_at) s_release_at = sys_now_ms();
             return true;
         }
         if (ev == SYS_EV_CLICK && (st == AI_THINKING || st == AI_SPEAKING)) {
@@ -240,6 +243,7 @@ static bool key(sys_key_t k, sys_key_ev_t ev)
     }
     if (k == SYS_KEY_UP && s_talking && ev == SYS_EV_CLICK) {
         s_talking = false;
+        s_release_at = 0;
         ai_cancel();
         shell_toast("已取消");
         return true;
@@ -260,12 +264,7 @@ static bool key(sys_key_t k, sys_key_ev_t ev)
 
 static void tick(int64_t now)
 {
-    (void)now;
-    if (s_talking && s_verify_release) {
-        // 连续 3 次(约 150ms)读到松开才算真的松手。
-        s_released_ticks = sys_key_any_held() ? 0 : s_released_ticks + 1;
-        if (s_released_ticks >= 3) finish_press();
-    }
+    if (s_talking && s_release_at && now - s_release_at >= RELEASE_CONFIRM_MS) finish_press();
     const ai_state_t st = ai_state();
     static srv_state_t last_srv = (srv_state_t)-1;
     const srv_state_t srv = relay_state();
