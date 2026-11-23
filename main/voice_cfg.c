@@ -69,6 +69,44 @@ void voice_error_text(char *out, size_t cap, const char *stage, int status)
     utf8_copy(out, cap, buf);
 }
 
+static uint8_t *put16(uint8_t *p, uint32_t v)
+{
+    p[0] = (uint8_t)v;
+    p[1] = (uint8_t)(v >> 8);
+    return p + 2;
+}
+static uint8_t *put32(uint8_t *p, uint32_t v) { return put16(put16(p, v & 0xFFFF), v >> 16); }
+static uint8_t *put_tag(uint8_t *p, const char *t)
+{
+    memcpy(p, t, 4);
+    return p + 4;
+}
+
+void voice_ima_wav_header(uint8_t h[VOICE_WAV_HEADER_BYTES], uint32_t blocks)
+{
+    enum { BLOCK_BYTES = 132, SAMPLES_PER_BLOCK = 257 };   // WAV 里块头的预测值也算一个样本
+    const uint32_t data = blocks * BLOCK_BYTES;
+    uint8_t *p = h;
+    p = put_tag(p, "RIFF");
+    p = put32(p, VOICE_WAV_HEADER_BYTES - 8 + data);
+    p = put_tag(p, "WAVE");
+    p = put_tag(p, "fmt ");
+    p = put32(p, 20);
+    p = put16(p, 0x11);                                   // IMA ADPCM
+    p = put16(p, 1);                                      // 单声道
+    p = put32(p, 16000);
+    p = put32(p, 16000 * BLOCK_BYTES / SAMPLES_PER_BLOCK); // 平均字节率
+    p = put16(p, BLOCK_BYTES);
+    p = put16(p, 4);                                      // 每样本 4 位
+    p = put16(p, 2);                                      // 扩展字段长度
+    p = put16(p, SAMPLES_PER_BLOCK);
+    p = put_tag(p, "fact");
+    p = put32(p, 4);
+    p = put32(p, blocks * SAMPLES_PER_BLOCK);
+    p = put_tag(p, "data");
+    put32(p, data);
+}
+
 static bool prefix(const char *s, const char *p) { return strncmp(s, p, strlen(p)) == 0; }
 
 bool voice_key_transport_ok(const char *url, const char *key)

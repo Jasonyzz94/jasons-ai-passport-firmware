@@ -129,6 +129,18 @@ static void test_transport(void)
     assert(!strcmp(buf, "对话:公网接口须用https"));
 }
 
+static void test_wav_header(void)
+{
+    uint8_t h[VOICE_WAV_HEADER_BYTES];
+    voice_ima_wav_header(h, 10);
+    assert(!memcmp(h, "RIFF", 4) && !memcmp(h + 8, "WAVEfmt ", 8));
+    assert(h[4] == (uint8_t)(52 + 1320) && h[5] == (uint8_t)((52 + 1320) >> 8));
+    assert(h[16] == 20 && h[20] == 0x11 && h[22] == 1);
+    assert(h[32] == 132 && h[34] == 4 && h[38] == 1 && h[39] == 1);   // 块 132 字节、4 位、每块 257 样本
+    assert(!memcmp(h + 40, "fact", 4) && !memcmp(h + 52, "data", 4));
+    assert(h[56] == (1320 & 0xFF) && h[57] == (1320 >> 8));
+}
+
 int main(void)
 {
     test_mode();
@@ -137,6 +149,7 @@ int main(void)
     test_utf8();
     test_resample();
     test_transport();
+    test_wav_header();
     puts("voice cfg tests: PASS");
     return 0;
 }

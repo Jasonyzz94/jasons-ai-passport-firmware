@@ -342,12 +342,24 @@ static int read_body(esp_http_client_handle_t c, char *out, int cap)
     return got;
 }
 
-static void wav_header(uint8_t h[44])
+// 云端识别的录音格式:IMA ADPCM WAV(格式 0x11),就是设备录音时本来就产出的块
+// (4 字节头 + 低半字节在前),一秒约 8KB,只有 PCM 的四分之一。
+//
+// 上传必须事先给出总长度:硅基流动的识别接口收到分块传输(Transfer-Encoding: chunked)
+// 一律返回 500(实测;同样的音频带 Content-Length 就能识别)。设备内存放不下整段录音,
+// 所以先按最长 DIRECT_MAX_BLOCKS 声明长度、边说边传,松手后用静音块补齐。
+// 结尾的静音不影响识别(实测 2.3 秒语音补到 9.3 秒,结果相同)。
+#define DIRECT_MAX_BLOCKS 938   // 938 块 × 256 样本 ≈ 15 秒;补齐最多约 124KB
+static bool write_all(esp_http_client_handle_t c, const void *data, size_t len)
 {
-    // 长度未知(边录边传):RIFF/data 长度写成最大值,解码器会读到流结束。
-    static const uint8_t t[44] = {'R','I','F','F',0xFF,0xFF,0xFF,0x7F,'W','A','V','E','f','m','t',' ',
-        16,0,0,0,1,0,1,0,0x80,0x3E,0,0,0,0x7D,0,0,2,0,16,0,'d','a','t','a',0xFF,0xFF,0xFF,0x7F};
-    memcpy(h, t, 44);
+    const char *d = data;
+    while (len) {
+        const int w = esp_http_client_write(c, d, (int)len);
+        if (w <= 0) return false;
+        d += w;
+        len -= (size_t)w;
+    }
+    return true;
 }
 
 #define ASR_CANCELLED 0
@@ -363,18 +375,20 @@ static int direct_asr(char *text, size_t len)
     esp_http_client_handle_t c = open_direct(base, key, "/audio/transcriptions", 30000, &err);
     if (!c) return err;
     esp_http_client_set_header(c, "Content-Type", "multipart/form-data; boundary=" BOUNDARY);
-    if (esp_http_client_open(c, -1) != ESP_OK) {
-        esp_http_client_cleanup(c);
-        return VOICE_ERR_NET;
-    }
     char head[320];
     const int hl = snprintf(head, sizeof(head),
         "--" BOUNDARY "\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n%s\r\n"
         "--" BOUNDARY "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"voice.wav\"\r\n"
         "Content-Type: audio/wav\r\n\r\n", g_settings.asr_model);
-    uint8_t wav[44];
-    wav_header(wav);
-    bool ok = write_chunk(c, (const uint8_t *)head, (size_t)hl) && write_chunk(c, wav, sizeof(wav));
+    static const char tail[] = "\r\n--" BOUNDARY "--\r\n";
+    const int total = hl + VOICE_WAV_HEADER_BYTES + DIRECT_MAX_BLOCKS * ADPCM_BLOCK_BYTES + (int)sizeof(tail) - 1;
+    if (esp_http_client_open(c, total) != ESP_OK) {
+        esp_http_client_cleanup(c);
+        return VOICE_ERR_NET;
+    }
+    uint8_t wav[VOICE_WAV_HEADER_BYTES];
+    voice_ima_wav_header(wav, DIRECT_MAX_BLOCKS);
+    bool ok = write_all(c, head, (size_t)hl) && write_all(c, wav, sizeof(wav));
     if (!ok || s_cancel || s_end) {
         esp_http_client_close(c);
         esp_http_client_cleanup(c);
@@ -394,28 +408,34 @@ static int direct_asr(char *text, size_t len)
     }
     const int64_t started = sys_now_ms();
     uint8_t blk[ADPCM_BLOCK_BYTES];
-    size_t blk_fill = 0;   // 流缓冲是字节流:攒满一整块再解码
-    static int16_t pcm[ADPCM_BLOCK_SAMPLES];
-    while (ok) {
+    size_t blk_fill = 0;   // 流缓冲是字节流:攒满一整块再发
+    int sent = 0;          // 已发的块数
+    while (ok && sent < DIRECT_MAX_BLOCKS) {
         const size_t n = xStreamBufferReceive(s_stream, blk + blk_fill, sizeof(blk) - blk_fill,
                                               pdMS_TO_TICKS(40));
         blk_fill += n;
         if (blk_fill == sizeof(blk)) {
-            const int samples = adpcm_decode_block(blk, blk_fill, pcm, ADPCM_BLOCK_SAMPLES);
-            ok = write_chunk(c, (const uint8_t *)pcm, (size_t)samples * 2);
+            ok = write_all(c, blk, sizeof(blk));
+            sent++;
             blk_fill = 0;
         }
         track_level();
         if (s_cancel) break;
-        if (sys_now_ms() - started > MAX_TALK_MS) s_end = true;
         if (!s_rec_ms && s_end) s_rec_ms = sys_now_ms() - started;
         if (s_end && !n && xStreamBufferIsEmpty(s_stream)) break;
     }
+    if (sent >= DIRECT_MAX_BLOCKS) s_end = true;   // 说满 15 秒:自动结束
     if (!s_rec_ms) s_rec_ms = sys_now_ms() - started;
     audio_capture_stop();
     drop_stream();   // 对话和朗读还要各握手一次:把录音缓冲还回去
-    static const char tail[] = "\r\n--" BOUNDARY "--\r\n";
-    if (ok && !s_cancel) ok = write_chunk(c, (const uint8_t *)tail, sizeof(tail) - 1) && write_chunk(c, NULL, 0);
+    if (!s_cancel) s_state = AI_THINKING;   // 补齐静音时界面已显示"思考中"
+    // 用静音块补齐到声明的长度(块头预测值 0、步长 0、全零半字节 = 一直是 0)
+    static const uint8_t silent[ADPCM_BLOCK_BYTES];
+    while (ok && !s_cancel && sent < DIRECT_MAX_BLOCKS) {
+        ok = write_all(c, silent, sizeof(silent));
+        sent++;
+    }
+    if (ok && !s_cancel) ok = write_all(c, tail, sizeof(tail) - 1);
     int status = s_cancel ? ASR_CANCELLED : VOICE_ERR_UPLOAD;
     static char resp[768];
     resp[0] = '\0';

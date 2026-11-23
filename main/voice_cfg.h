@@ -43,6 +43,11 @@ void voice_error_text(char *out, size_t cap, const char *stage, int status);
 // (例如自建的 Ollama),免得密钥在公网上明文传输。没有密钥时任何地址都行。
 bool voice_key_transport_ok(const char *url, const char *key);
 
+// IMA ADPCM WAV(格式 0x11,单声道 16 kHz)的文件头,数据为 blocks 个 audio_dsp 的 ADPCM 块
+// (每块 132 字节:4 字节头 + 256 个样本,低半字节在前)。云端识别用它上传录音。
+#define VOICE_WAV_HEADER_BYTES 60
+void voice_ima_wav_header(uint8_t h[VOICE_WAV_HEADER_BYTES], uint32_t blocks);
+
 // 按 UTF-8 字符边界拷贝:放不下时在完整字符处截断,不会留下半个汉字。返回写入的字节数。
 size_t utf8_copy(char *dst, size_t cap, const char *src);
 
