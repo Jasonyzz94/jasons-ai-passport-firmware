@@ -13,6 +13,9 @@ bool relay_task_running(void);
 bool relay_discovery_attempted(void);
 // 当前空闲内存是否够做一次 HTTPS 握手(不够时跳过请求,避免界面因内存耗尽卡死)。
 bool local_tls_ok(void);
+// 联网功能报告一次访问外网(非局域网地址)的结果:连续失败会触发外网探测,
+// 确实不通且附近有别的已保存网络时换网络(esp_net.c)。
+void net_report_internet(bool ok);
 #define TLS_MIN_FREE (48 * 1024)    // 握手前至少要这么多空闲
 #define TLS_MIN_BLOCK (18 * 1024)   // 且最大连续块不小于这个
 // 最近一次 local_tls_ok 看到的空闲 / 最大块(KB),以及是否因界面在用应急储备而拒绝。

@@ -306,6 +306,14 @@ static void voice_endpoint(const char **base, const char **key)
 }
 
 // 失败时 *err 给出原因(VOICE_ERR_MEM / VOICE_ERR_NET)。
+// 打开云端连接,并把外网通不通报告给 Wi-Fi 服务(连着却上不了网时它会换网络)。
+static esp_err_t open_cloud(esp_http_client_handle_t c, int len, const char *base)
+{
+    const esp_err_t e = esp_http_client_open(c, len);
+    if (!voice_url_is_lan(base)) net_report_internet(e == ESP_OK);
+    return e;
+}
+
 static esp_http_client_handle_t open_direct(const char *base, const char *key, const char *path,
                                             int timeout, int *err)
 {
@@ -382,7 +390,7 @@ static int direct_asr(char *text, size_t len)
         "Content-Type: audio/wav\r\n\r\n", g_settings.asr_model);
     static const char tail[] = "\r\n--" BOUNDARY "--\r\n";
     const int total = hl + VOICE_WAV_HEADER_BYTES + DIRECT_MAX_BLOCKS * ADPCM_BLOCK_BYTES + (int)sizeof(tail) - 1;
-    if (esp_http_client_open(c, total) != ESP_OK) {
+    if (open_cloud(c, total, base) != ESP_OK) {
         esp_http_client_cleanup(c);
         return VOICE_ERR_NET;
     }
@@ -499,7 +507,7 @@ static int direct_chat(const char *question, char *answer, size_t len)
         esp_http_client_set_header(c, "Content-Type", "application/json");
         const int bl = (int)strlen(body);
         status = VOICE_ERR_NET;
-        if (esp_http_client_open(c, bl) == ESP_OK && esp_http_client_write(c, body, bl) == bl
+        if (open_cloud(c, bl, g_settings.api_base) == ESP_OK && esp_http_client_write(c, body, bl) == bl
             && esp_http_client_fetch_headers(c) >= 0) {
             status = esp_http_client_get_status_code(c);
             resp = malloc(CHAT_RESP_MAX);
@@ -589,7 +597,7 @@ static void direct_speak(const char *text)
         esp_http_client_set_header(c, "Content-Type", "application/json");
         const int bl = (int)strlen(body);
         status = VOICE_ERR_NET;
-        if (esp_http_client_open(c, bl) == ESP_OK && esp_http_client_write(c, body, bl) == bl
+        if (open_cloud(c, bl, base) == ESP_OK && esp_http_client_write(c, body, bl) == bl
             && esp_http_client_fetch_headers(c) >= 0) {
             status = esp_http_client_get_status_code(c);
             // 约 1.8KB,只在朗读时占用

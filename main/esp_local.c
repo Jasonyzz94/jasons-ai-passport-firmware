@@ -11,6 +11,7 @@
 #include "sys.h"
 #include "ics_parse.h"
 #include "weather_shape.h"
+#include "voice_cfg.h"
 
 #include "cJSON.h"
 #include "esp_crt_bundle.h"
@@ -108,6 +109,7 @@ int local_http(const char *url, const char *auth, const char *body, char *out, i
         esp_http_client_set_post_field(c, body, (int)strlen(body));
     }
     const esp_err_t err = esp_http_client_perform(c);
+    if (!voice_url_is_lan(url)) net_report_internet(err == ESP_OK);   // 服务器回了错误码也算外网通
     const int status = err == ESP_OK ? esp_http_client_get_status_code(c) : -1;
     esp_http_client_cleanup(c);
     if (err != ESP_OK) {

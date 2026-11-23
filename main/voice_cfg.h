@@ -42,6 +42,8 @@ void voice_error_text(char *out, size_t cap, const char *stage, int status);
 // 密钥能不能发往这个地址:https 都行;http 只允许本机和局域网
 // (例如自建的 Ollama),免得密钥在公网上明文传输。没有密钥时任何地址都行。
 bool voice_key_transport_ok(const char *url, const char *key);
+// 地址是不是本机 / 局域网(私有 IP、localhost、.local)。这类请求失败不说明外网断了。
+bool voice_url_is_lan(const char *url);
 
 // IMA ADPCM WAV(格式 0x11,单声道 16 kHz)的文件头,数据为 blocks 个 audio_dsp 的 ADPCM 块
 // (每块 132 字节:4 字节头 + 256 个样本,低半字节在前)。云端识别用它上传录音。

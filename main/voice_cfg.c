@@ -109,13 +109,12 @@ void voice_ima_wav_header(uint8_t h[VOICE_WAV_HEADER_BYTES], uint32_t blocks)
 
 static bool prefix(const char *s, const char *p) { return strncmp(s, p, strlen(p)) == 0; }
 
-bool voice_key_transport_ok(const char *url, const char *key)
+bool voice_url_is_lan(const char *url)
 {
-    if (!key[0] || prefix(url, "https://")) return true;
-    if (!prefix(url, "http://")) return false;
+    const char *h = prefix(url, "https://") ? url + 8 : prefix(url, "http://") ? url + 7 : NULL;
+    if (!h) return false;
     char host[64];
-    const char *h = url + 7;
-    size_t n = strcspn(h, ":/?#");
+    const size_t n = strcspn(h, ":/?#");
     if (n == 0 || n >= sizeof(host)) return false;
     memcpy(host, h, n);
     host[n] = '\0';
@@ -128,6 +127,12 @@ bool voice_key_transport_ok(const char *url, const char *key)
         return false;
     return a == 10 || a == 127 || (a == 192 && b == 168) || (a == 172 && b >= 16 && b <= 31)
         || (a == 169 && b == 254);
+}
+
+bool voice_key_transport_ok(const char *url, const char *key)
+{
+    if (!key[0] || prefix(url, "https://")) return true;
+    return prefix(url, "http://") && voice_url_is_lan(url);
 }
 
 size_t utf8_copy(char *dst, size_t cap, const char *src)

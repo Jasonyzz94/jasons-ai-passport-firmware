@@ -18,11 +18,14 @@
 #include "esp_netif_sntp.h"
 #include "esp_random.h"
 #include "esp_wifi.h"
+#include "lwip/netdb.h"
 #include "lwip/sockets.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -39,7 +42,10 @@ typedef enum {
     CMD_GOT_IP,           // 连上了:更新已保存列表的顺序
     CMD_TRY,              // 试连手机上提交的新网络
     CMD_FORGET,           // 从已保存列表删除 s_forget
+    CMD_SCAN_SOFT,        // 扫描但不打断正在进行的连接(配网页用;连接中就等连完再扫)
 } net_cmd_t;
+
+#define CONNECT_TIMEOUT_MS 20000   // 连接一直没有结果(既没 IP 也没断开事件)就当作失败
 
 #define BOOT_SYNC_MS 60000
 #define RETRY_FAST 5
@@ -58,6 +64,9 @@ static volatile net_state_t s_state = NET_OFF;
 static volatile scan_state_t s_scan = SCAN_IDLE;
 static volatile portal_state_t s_portal = PORTAL_OFF;
 static volatile int s_retries;
+static volatile int64_t s_connect_since;   // 本次连接尝试开始的时间;0 = 不在等结果
+static volatile bool s_scan_pending;       // 有扫描请求,等连接尝试结束后再扫
+static volatile int s_unreach;             // 连着 Wi-Fi 时连续访问外网失败的次数
 static bool s_sntp_started;
 
 static char s_ip[16];
@@ -134,6 +143,9 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
             if (s_state == NET_CONNECTED || s_state == NET_CONNECTING) {
                 s_retries += hopeless && s_state == NET_CONNECTING ? 2 : 1;
                 s_state = s_retries > RETRY_FAST ? NET_FAILED : NET_CONNECTING;
+                s_connect_since = 0;
+                ESP_LOGW(TAG, "断开 %s,原因 %d,累计 %d/%d%s", s_ssid, d ? d->reason : -1, s_retries, RETRY_FAST,
+                         s_state == NET_FAILED ? ",准备换网络" : "");
                 post(CMD_RECONNECT);
             }
             break;
@@ -168,6 +180,8 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
         const ip_event_got_ip_t *ev = data;
         snprintf(s_ip, sizeof(s_ip), IPSTR, IP2STR(&ev->ip_info.ip));
         s_retries = 0;
+        s_connect_since = 0;
+        s_unreach = 0;
         s_state = NET_CONNECTED;
         ESP_LOGI(TAG, "已连接 %s,IP %s", s_ssid, s_ip);
         post(CMD_GOT_IP);
@@ -249,19 +263,109 @@ static void refresh_scan(void)
 {
     if (!s_wifi_started) return;
     s_scan = SCAN_RUNNING;
-    if (esp_wifi_scan_start(NULL, false) != ESP_OK) {
+    const esp_err_t err = esp_wifi_scan_start(NULL, false);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "换网络前扫描失败:%s,按上次的扫描结果排序", esp_err_to_name(err));
         s_scan = SCAN_FAILED;
         return;
     }
     for (int i = 0; i < 80 && s_scan == SCAN_RUNNING; i++) vTaskDelay(pdMS_TO_TICKS(50));
+    ESP_LOGI(TAG, "扫描到 %d 个网络", s_ap_count);
 }
 
-// 这一轮下一个要试的网络(调用时持有 s_lock)。
-static int pick_next_locked(void)
+// 下一个要试的网络,跳过 tried 里的(调用时持有 s_lock)。
+static int pick_next_excluding_locked(uint32_t tried)
 {
     const char *vis[NET_SCAN_MAX];
     for (int i = 0; i < s_ap_count; i++) vis[i] = s_aps[i].ssid;
-    return wifi_list_next(&s_saved, s_tried, vis, s_ap_count);
+    return wifi_list_next(&s_saved, tried, vis, s_ap_count);
+}
+static int pick_next_locked(void) { return pick_next_excluding_locked(s_tried); }
+
+// ---------------------------------------------------------------------------
+// 外网健康:Wi-Fi 连着但外网不通(例如手机热点没流量、路由器外网断了)时,
+// 不会有断开事件。联网功能连续两次连不上外网,就主动探测一次;确实不通、
+// 且附近看得到别的已保存网络时才换(只用局域网中转的网络不会被换掉)。
+// ---------------------------------------------------------------------------
+#define HEALTH_FAILS 2
+#define HEALTH_GAP_MS 60000
+static int64_t s_health_at;
+
+void net_report_internet(bool ok)
+{
+    if (ok) s_unreach = 0;
+    else if (s_state == NET_CONNECTED) s_unreach++;
+}
+
+// 能否在 4 秒内和 host:80 建立 TCP 连接(含 DNS)。只在 net 任务里调用。
+static bool tcp_probe(const char *host)
+{
+    const struct addrinfo hints = {.ai_family = AF_INET, .ai_socktype = SOCK_STREAM};
+    struct addrinfo *res = NULL;
+    if (getaddrinfo(host, "80", &hints, &res) != 0 || !res) {
+        if (res) freeaddrinfo(res);
+        return false;
+    }
+    bool ok = false;
+    const int s = socket(AF_INET, SOCK_STREAM, 0);
+    if (s >= 0) {
+        fcntl(s, F_SETFL, fcntl(s, F_GETFL, 0) | O_NONBLOCK);
+        if (connect(s, res->ai_addr, res->ai_addrlen) == 0) {
+            ok = true;
+        } else if (errno == EINPROGRESS) {
+            fd_set w;
+            FD_ZERO(&w);
+            FD_SET(s, &w);
+            struct timeval tv = {.tv_sec = 4, .tv_usec = 0};
+            if (select(s + 1, NULL, &w, NULL, &tv) > 0) {
+                int e = 0;
+                socklen_t l = sizeof(e);
+                ok = getsockopt(s, SOL_SOCKET, SO_ERROR, &e, &l) == 0 && e == 0;
+            }
+        }
+        close(s);
+    }
+    freeaddrinfo(res);
+    return ok;
+}
+
+static void refresh_scan(void);
+static void apply(void);
+static void check_internet(void)
+{
+    s_unreach = 0;
+    if (tcp_probe("www.baidu.com") || tcp_probe("www.qq.com")) {
+        ESP_LOGI(TAG, "外网探测正常,不换网络");
+        return;
+    }
+    refresh_scan();
+    char name[33] = "";
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    int next = -1;
+    if (s_cur >= 0 && s_cur < s_saved.count) {
+        next = pick_next_excluding_locked(1u << s_cur);
+        if (next >= 0) {
+            bool seen = false;   // 只换到这次扫描真看得到的
+            for (int i = 0; i < s_ap_count; i++) seen |= !strcmp(s_aps[i].ssid, s_saved.n[next].ssid);
+            if (!seen) next = -1;
+        }
+        if (next >= 0) {
+            s_tried = 1u << s_cur;
+            s_cur = next;
+            snprintf(name, sizeof(name), "%s", s_saved.n[next].ssid);
+        }
+    }
+    xSemaphoreGive(s_lock);
+    if (next < 0) {
+        ESP_LOGW(TAG, "%s 连着但上不了外网,附近没有别的已保存网络,先不换", s_ssid);
+        return;
+    }
+    ESP_LOGW(TAG, "%s 连着但上不了外网,换到 %s", s_ssid, name);
+    s_retries = 0;
+    s_state = NET_OFF;
+    esp_wifi_disconnect();
+    vTaskDelay(pdMS_TO_TICKS(200));
+    apply();
 }
 
 // 当前网络连不上。返回 true 表示换了一个网络并已开始连接。
@@ -286,6 +390,7 @@ static bool fallback(void)
     const bool more = pick_next_locked() >= 0;
     xSemaphoreGive(s_lock);
     if (!more) {   // 这一轮都试过了:30 秒后从头再来(先试看得到的)
+        ESP_LOGW(TAG, "已保存的网络这一轮都连不上,30 秒后再试");
         xSemaphoreTake(s_lock, portMAX_DELAY);
         s_tried = 0;
         s_cur = -1;
@@ -397,9 +502,33 @@ static void sta_connect(void)
     wc.sta.threshold.authmode = c.pass[0] ? WIFI_AUTH_WPA_PSK : WIFI_AUTH_OPEN;
     wc.sta.pmf_cfg.capable = true;
     snprintf(s_ssid, sizeof(s_ssid), "%s", c.ssid);
-    esp_wifi_set_config(WIFI_IF_STA, &wc);
     s_state = NET_CONNECTING;
-    esp_wifi_connect();
+    s_connect_since = sys_now_ms();
+    ESP_LOGI(TAG, "连接 %s(第 %d 次)", c.ssid, s_retries + 1);
+    esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &wc);
+    if (err == ESP_OK) err = esp_wifi_connect();
+    if (err != ESP_OK) {
+        // 同步失败时驱动不会再发断开事件:自己推进状态机,否则会一直停在"正在连接"。
+        s_retries++;
+        s_state = s_retries > RETRY_FAST ? NET_FAILED : NET_CONNECTING;
+        s_connect_since = 0;
+        ESP_LOGW(TAG, "连接 %s 没能开始:%s", c.ssid, esp_err_to_name(err));
+        post(CMD_RECONNECT);
+    }
+}
+
+// 扫描附近网络。正在连接时驱动会拒绝扫描("STA is connecting, scan are not allowed"),
+// 这时记下请求,等这次连接有结果(连上或失败)后由 net 任务补扫。只在 net 任务里调用。
+static void scan_now_or_later(void)
+{
+    s_scan = SCAN_RUNNING;   // 网页据此显示"正在扫描"
+    if (!s_wifi_started || s_state == NET_CONNECTING) {
+        s_scan_pending = true;
+        return;
+    }
+    const esp_err_t err = esp_wifi_scan_start(NULL, false);
+    s_scan_pending = err != ESP_OK;
+    if (err != ESP_OK) ESP_LOGW(TAG, "扫描没能开始:%s,稍后再试", esp_err_to_name(err));
 }
 
 static bool wanted(void) { return s_refs > 0 || s_boot_sync || s_portal_on || s_trial_on; }
@@ -688,7 +817,10 @@ static esp_err_t page_get(httpd_req_t *req)
         chunk(req, row);
         shown++;
     }
-    if (!shown) chunk(req, s_scan == SCAN_RUNNING ? "<p>正在扫描…</p>" : "<p>没有扫描到网络。</p>");  // glyph-check: ignore
+    if (!shown) {
+        chunk(req, s_scan == SCAN_RUNNING ? "<p>正在扫描…</p><script>setTimeout(()=>location.reload(),3000)</script>"  // glyph-check: ignore
+                                         : "<p>没有扫描到网络。</p>");  // glyph-check: ignore
+    }
     chunk(req, "<p><a href=/rescan style='color:#ff6b57'>重新扫描</a></p>"  // glyph-check: ignore
                "<label>网络名称(点上面的列表,或手动输入隐藏网络)</label>"  // glyph-check: ignore
                "<input name=ssid id=ssid autocomplete=off>"
@@ -798,7 +930,7 @@ static esp_err_t page_status(httpd_req_t *req)
 static esp_err_t page_rescan(httpd_req_t *req)
 {
     s_scan = SCAN_RUNNING;
-    esp_wifi_scan_start(NULL, true);   // 阻塞约 2 秒,在 httpd 任务里,不影响界面
+    post(CMD_SCAN_SOFT);   // 交给 net 任务:不打断正在进行的连接,连完再扫
     httpd_resp_set_status(req, "303 See Other");
     httpd_resp_set_hdr(req, "Location", "/");
     return httpd_resp_send(req, NULL, 0);
@@ -1067,7 +1199,7 @@ static void portal_start(void)
         s_portal = PORTAL_FAILED;
         return;
     }
-    esp_wifi_scan_start(NULL, false);   // 给表单提供附近网络列表
+    scan_now_or_later();   // 给表单提供附近网络列表(正在连接时连完再扫)
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.max_uri_handlers = 8;
     cfg.stack_size = 8192;
@@ -1124,9 +1256,10 @@ static void net_task(void *arg)
                         // 连不上:先换下一个已保存的网络;都不行就 30 秒后从头再试。
                         if (!fallback()) retry_at = sys_now_ms() + 30000;
                     } else {
+                        // 先置为 OFF 再断开:自己断开引起的断开事件不该再算一次失败。
+                        if (s_state != NET_NO_CONFIG) s_state = NET_OFF;
                         esp_wifi_disconnect();
                         vTaskDelay(pdMS_TO_TICKS(s_retries ? 1000 * s_retries : 100));
-                        if (s_state != NET_NO_CONFIG) s_state = NET_OFF;
                         apply();
                     }
                 } else {
@@ -1143,6 +1276,7 @@ static void net_task(void *arg)
                     s_scan = SCAN_FAILED;
                 }
                 break;
+            case CMD_SCAN_SOFT: scan_now_or_later(); break;
             case CMD_GOT_IP: on_got_ip(); break;
             case CMD_TRY:
                 retry_at = 0;
@@ -1150,6 +1284,7 @@ static void net_task(void *arg)
                 if (s_wifi_started) {
                     s_state = NET_OFF;
                     esp_wifi_disconnect();
+                    vTaskDelay(pdMS_TO_TICKS(200));   // 让这次断开事件在 OFF 状态下过去
                 }
                 apply();
                 break;
@@ -1170,6 +1305,23 @@ static void net_task(void *arg)
             }
         }
         const int64_t now = sys_now_ms();
+        // 连接尝试既没拿到 IP 也没有断开事件:当作一次失败,让状态机继续走(可能换网络)。
+        if (s_wifi_started && s_state == NET_CONNECTING && s_connect_since && now - s_connect_since > CONNECT_TIMEOUT_MS) {
+            s_connect_since = 0;
+            s_retries++;
+            s_state = s_retries > RETRY_FAST ? NET_FAILED : NET_CONNECTING;
+            ESP_LOGW(TAG, "连接 %s 超过 %d 秒没有结果,累计 %d/%d", s_ssid, CONNECT_TIMEOUT_MS / 1000, s_retries,
+                     RETRY_FAST);
+            post(CMD_RECONNECT);
+        }
+        // 连着但外网不通:主动探测,确实不通且附近有别的已保存网络才换
+        if (s_wifi_started && s_state == NET_CONNECTED && s_unreach >= HEALTH_FAILS && s_saved.count >= 2
+            && !s_trial_on && now - s_health_at > HEALTH_GAP_MS) {
+            s_health_at = now;
+            check_internet();
+        }
+        // 之前被拒的扫描:连接尝试结束后补扫
+        if (s_scan_pending && s_wifi_started && s_state != NET_CONNECTING) scan_now_or_later();
         // 以前 Wi-Fi 启动失败一次就不再尝试,界面会一直显示"没有网络"。现在每 2 秒重试。
         static int64_t start_retry_at;
         if (wanted() && !s_wifi_started && s_start_fails > 0 && now >= start_retry_at) {
@@ -1207,7 +1359,7 @@ void net_init(void)
     esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_wifi, NULL, NULL);
     s_boot_sync = settings_has_wifi();
     s_state = settings_has_wifi() ? NET_OFF : NET_NO_CONFIG;
-    xTaskCreate(net_task, "net", 4096, NULL, 5, NULL);
+    xTaskCreate(net_task, "net", 5120, NULL, 5, NULL);   // 外网探测要做 DNS 和 socket
 }
 
 // ---------------------------------------------------------------------------
