@@ -129,6 +129,8 @@ static void test_transport(void)
     assert(!voice_url_is_lan("https://api.siliconflow.cn/v1"));
     assert(!voice_url_is_lan("http://192.168.1.20.evil.com/v1"));
     char buf[64];
+    voice_error_text(buf, sizeof(buf), "朗读", VOICE_ERR_CUT);
+    assert(!strcmp(buf, "朗读:音频中途断了"));
     voice_error_text(buf, sizeof(buf), "对话", VOICE_ERR_INSECURE);
     assert(!strcmp(buf, "对话:公网接口须用https"));
 }

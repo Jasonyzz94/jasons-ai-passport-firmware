@@ -117,6 +117,20 @@ static void drop_stream(void)
     if (st) vStreamBufferDelete(st);
 }
 
+// 把一块音频交给播放队列。队列满时一直等(把网络读取放慢到播放速度),
+// 以前等 200ms 还塞不进去就悄悄丢掉,界面忙着画长回答时朗读会缺一截。取消时放弃。
+static int s_play_dropped;
+static void play_block(const uint8_t *b, size_t len)
+{
+    for (int tries = 0; !s_cancel; tries++) {
+        if (audio_play_push(b, len)) return;   // 每次最多等 200ms
+        if (tries >= 50) {                       // 10 秒都放不进去:播放已经停了
+            s_play_dropped++;
+            return;
+        }
+    }
+}
+
 static void sink(const uint8_t *block, size_t len, void *user)
 {
     (void)user;
@@ -189,15 +203,21 @@ static void speak(void)
         if (r <= 0) break;
         fill += r;
         if (fill == ADPCM_BLOCK_BYTES) {
-            audio_play_push(block, ADPCM_BLOCK_BYTES);
+            play_block(block, ADPCM_BLOCK_BYTES);
             fill = 0;
         }
     }
-    if (fill > 4 && !s_cancel) audio_play_push(block, (size_t)fill);
+    if (fill > 4 && !s_cancel) play_block(block, (size_t)fill);
+    const bool cut = !s_cancel && !esp_http_client_is_complete_data_received(c);
     esp_http_client_close(c);
     esp_http_client_cleanup(c);
     while (!s_cancel && audio_playing()) vTaskDelay(pdMS_TO_TICKS(50));
     if (s_cancel) audio_play_flush();
+    if (cut) {
+        ESP_LOGW(TAG, "中转朗读音频没收完(空闲 %u,最大块 %u)", (unsigned)sys_free_heap(), (unsigned)sys_largest_block());
+        fail_stage("朗读", VOICE_ERR_CUT);
+        return;
+    }
     s_state = AI_IDLE;
 }
 
@@ -583,7 +603,7 @@ static void play_samples(play_acc_t *p, const int16_t *pcm, size_t n)
     for (size_t i = 0; i < n; i++) {
         p->acc[p->n++] = pcm[i];
         if (p->n == ADPCM_BLOCK_SAMPLES) {
-            audio_play_push(blk, adpcm_encode_block(&p->enc, p->acc, ADPCM_BLOCK_SAMPLES, blk));
+            play_block(blk, adpcm_encode_block(&p->enc, p->acc, ADPCM_BLOCK_SAMPLES, blk));
             p->n = 0;
         }
     }
@@ -632,9 +652,13 @@ static void direct_speak(const char *text)
             if (status == 200 && !w) status = VOICE_ERR_MEM;
             if (w) {
                 int fill = 0;   // raw 里的字节数(可能有半个样本留到下一次)
+                int r = 0;
+                size_t total = 0;
+                s_play_dropped = 0;
                 while (!s_cancel) {
-                    const int r = esp_http_client_read(c, (char *)w->raw + fill, (int)sizeof(w->raw) - fill);
+                    r = esp_http_client_read(c, (char *)w->raw + fill, (int)sizeof(w->raw) - fill);
                     if (r <= 0) break;
+                    total += (size_t)r;
                     fill += r;
                     const size_t samples = (size_t)fill / 2;
                     if (rate24) play_samples(&w->acc, w->rs, resample24_to16(&w->rst, w->raw, samples, w->rs));
@@ -644,9 +668,20 @@ static void direct_speak(const char *text)
                 }
                 if (w->acc.n >= 2 && !s_cancel) {
                     uint8_t blk[ADPCM_BLOCK_BYTES];
-                    audio_play_push(blk, adpcm_encode_block(&w->acc.enc, w->acc.acc, w->acc.n, blk));
+                    play_block(blk, adpcm_encode_block(&w->acc.enc, w->acc.acc, w->acc.n, blk));
                 }
                 free(w);
+                // 以前读取出错(返回负数)和正常读完一样直接结束:朗读只剩前几个字,也没有任何提示。
+                const unsigned secs10 = (unsigned)(total * 10 / (rate24 ? 48000 : 32000));
+                if (!s_cancel && !esp_http_client_is_complete_data_received(c)) {
+                    status = VOICE_ERR_CUT;
+                    ESP_LOGW(TAG, "朗读音频没收完:收到 %u 字节(约 %u.%u 秒),最后一次读取 %d,"
+                             "空闲 %u,最大块 %u", (unsigned)total, secs10 / 10, secs10 % 10, r,
+                             (unsigned)sys_free_heap(), (unsigned)sys_largest_block());
+                } else {
+                    ESP_LOGI(TAG, "朗读音频 %u 字节(约 %u.%u 秒)", (unsigned)total, secs10 / 10, secs10 % 10);
+                }
+                if (s_play_dropped) ESP_LOGW(TAG, "播放队列长时间不动,丢了 %d 块", s_play_dropped);
             } else if (status != 200 && status != VOICE_ERR_MEM) {
                 char resp[200];
                 read_body(c, resp, sizeof(resp));

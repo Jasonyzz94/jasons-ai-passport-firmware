@@ -47,6 +47,7 @@ const char *voice_reason(int status)
     case VOICE_ERR_EMPTY: return "没听清";
     case VOICE_ERR_UPLOAD: return "上传中断";
     case VOICE_ERR_INSECURE: return "公网接口须用https";
+    case VOICE_ERR_CUT: return "音频中途断了";
     case 401:
     case 403: return "密钥无效";
     case 402: return "余额不足";

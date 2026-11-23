@@ -35,6 +35,7 @@ void voice_resolve(const char *api_base, const char *api_key, const char *voice_
 #define VOICE_ERR_EMPTY (-4)    // 识别结果为空
 #define VOICE_ERR_UPLOAD (-5)   // 上传中断
 #define VOICE_ERR_INSECURE (-6) // 密钥不能用明文 http 发往公网
+#define VOICE_ERR_CUT (-7)      // 音频下载到一半断了(没收到结尾)
 const char *voice_reason(int status);
 // "识别:密钥无效" 这类屏幕提示。stage 例 "识别" / "对话" / "朗读"。
 void voice_error_text(char *out, size_t cap, const char *stage, int status);

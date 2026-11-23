@@ -291,7 +291,8 @@ void audio_svc_init(void)
     s_ok = true;
     // 优先级必须低于 LVGL 任务(4):分析算得慢时只会少几帧,不会饿死界面和空闲任务
     // (之前是 6,配合软件浮点的音高检测会触发看门狗 = "死机")。
-    xTaskCreate(audio_task, "audio", 6144, NULL, 3, &s_task);
+    // 优先级高于界面(LVGL 任务为 4):画长回答时也不能让播放断粮,否则朗读会断断续续或缺一截。
+    xTaskCreate(audio_task, "audio", 6144, NULL, 5, &s_task);
 }
 
 void audio_beep(beep_t pattern)
