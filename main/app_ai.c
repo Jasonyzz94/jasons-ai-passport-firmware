@@ -91,6 +91,15 @@ static void push_turn(const char *q, const char *a)
 
 static void dock_set(const char *text, uint32_t bg, uint32_t fg, bool meter)
 {
+    // 底栏只有一行:放不下的提示(例如带原因的报错)循环滚动,不再被截掉。
+    if (meter) {
+        lv_label_set_long_mode(s_dock_label, LV_LABEL_LONG_CLIP);
+        lv_obj_set_width(s_dock_label, LV_SIZE_CONTENT);
+    } else {
+        lv_obj_set_width(s_dock_label, UI_W - 2 * UI_PAD - 28);
+        lv_label_set_long_mode(s_dock_label, LV_LABEL_LONG_SCROLL_CIRCULAR);
+        lv_obj_set_style_text_align(s_dock_label, LV_TEXT_ALIGN_CENTER, 0);
+    }
     lv_label_set_text(s_dock_label, text);
     lv_obj_set_style_bg_color(s_dock, ui_c(bg), 0);
     lv_obj_set_style_text_color(s_dock_label, ui_c(fg), 0);

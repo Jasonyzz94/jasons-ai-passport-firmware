@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <string.h>
 
+static dsp_work_t s_work;   // 测试用:静态清零的工作区
+
 #define SR 16000
 #define PI 3.14159265358979323846
 
@@ -45,9 +47,9 @@ static void test_bands_follow_tone(void)
     static int16_t buf[512];
     float low[20], high[20];
     sine(buf, 512, 200, 0.5f);
-    dsp_bands(buf, 512, SR, low, 20);
+    dsp_bands(&s_work, buf, 512, SR, low, 20);
     sine(buf, 512, 4000, 0.5f);
-    dsp_bands(buf, 512, SR, high, 20);
+    dsp_bands(&s_work, buf, 512, SR, high, 20);
     int lo_peak = 0, hi_peak = 0;
     for (int i = 0; i < 20; i++) {
         if (low[i] > low[lo_peak]) lo_peak = i;
@@ -65,7 +67,7 @@ static void test_pitch(void)
     for (size_t i = 0; i < sizeof(tones) / sizeof(tones[0]); i++) {
         sine(buf, 1024, tones[i], 0.4f);
         float clarity = 0;
-        const float hz = dsp_pitch(buf, 1024, SR, &clarity);
+        const float hz = dsp_pitch(&s_work, buf, 1024, SR, &clarity);
         if (fabsf(hz - tones[i]) > tones[i] * 0.01f) {
             printf("pitch %.2f -> %.2f\n", tones[i], hz);
             assert(0);
@@ -77,11 +79,11 @@ static void test_pitch(void)
         buf[i] = (int16_t)(8000 * sin(2 * PI * 146.83 * i / SR) + 5000 * sin(2 * PI * 293.66 * i / SR)
                            + 3000 * sin(2 * PI * 440.49 * i / SR));
     }
-    const float hz = dsp_pitch(buf, 1024, SR, NULL);
+    const float hz = dsp_pitch(&s_work, buf, 1024, SR, NULL);
     assert(fabsf(hz - 146.83f) < 2.0f);
     // 静音无音高
     memset(buf, 0, sizeof(buf));
-    assert(dsp_pitch(buf, 1024, SR, NULL) == 0.0f);
+    assert(dsp_pitch(&s_work, buf, 1024, SR, NULL) == 0.0f);
 }
 
 static void test_note(void)

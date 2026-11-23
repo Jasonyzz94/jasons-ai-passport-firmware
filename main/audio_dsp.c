@@ -41,15 +41,13 @@ void dsp_fft(float *re, float *im, int n)
     }
 }
 
-void dsp_bands(const int16_t *pcm, int n, int sample_rate, float *bands, int nbands)
+void dsp_bands(dsp_work_t *w, const int16_t *pcm, int n, int sample_rate, float *bands, int nbands)
 {
-    static float re[DSP_FFT_N], im[DSP_FFT_N];
-    static float window[DSP_FFT_N];
-    static int window_n;
+    float *re = w->re, *im = w->im, *window = w->window;
     if (n > DSP_FFT_N) n = DSP_FFT_N;
-    if (window_n != n) {   // Hann 窗只算一次(没有 FPU,cosf 很贵)
+    if (w->window_n != n) {   // Hann 窗只算一次(没有 FPU,cosf 很贵)
         for (int i = 0; i < n; i++) window[i] = 0.5f - 0.5f * cosf(2.0f * (float)M_PI * i / (float)(n - 1));
-        window_n = n;
+        w->window_n = n;
     }
     for (int i = 0; i < n; i++) {
         re[i] = pcm[i] / 32768.0f * window[i];
@@ -86,14 +84,14 @@ float dsp_dbfs(const int16_t *pcm, int n)
     return rms < 1e-6 ? -120.0f : (float)(20.0 * log10(rms));
 }
 
-float dsp_pitch(const int16_t *pcm, int n, int sample_rate, float *clarity)
+float dsp_pitch(dsp_work_t *w, const int16_t *pcm, int n, int sample_rate, float *clarity)
 {
     // ESP32-C3 没有浮点单元:整个相关运算用整数做。先 2:1 降采样到 sample_rate/2,
     // 再做 McLeod NSDF:nsdf(t) = 2*r(t) / m(t),取第一个超过 0.85*最大值的峰。
     // 16 kHz、1024 点时约 155 个延迟 × 512 点 ≈ 8 万次整数乘加(原来是 50 万次软件双精度)。
-    enum { MAXD = 512, MAXLAG = 200 };
-    static int16_t d[MAXD];
-    static float nsdf[MAXLAG];
+    enum { MAXD = DSP_PITCH_MAXD, MAXLAG = DSP_PITCH_MAXLAG };
+    int16_t *d = w->d;
+    float *nsdf = w->nsdf;
     if (clarity) *clarity = 0.0f;
     int m = n / 2;
     if (m > MAXD) m = MAXD;

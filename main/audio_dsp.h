@@ -10,15 +10,27 @@
 // 原地复数 FFT(n 为 2 的幂)。re/im 长度 n。
 void dsp_fft(float *re, float *im, int n);
 
+// 频谱和音高检测用的工作区(约 9KB)。不是常驻静态数组:调用方只在需要分析时分配,
+// 用完释放(没有 PSRAM,常驻会挤掉 HTTPS / 语音助手需要的内存)。使用前清零。
+#define DSP_PITCH_MAXD 512
+#define DSP_PITCH_MAXLAG 200
+typedef struct {
+    float re[DSP_FFT_N], im[DSP_FFT_N];
+    float window[DSP_FFT_N];
+    int window_n;                      // 已算好的 Hann 窗长度(0 = 还没算)
+    int16_t d[DSP_PITCH_MAXD];
+    float nsdf[DSP_PITCH_MAXLAG];
+} dsp_work_t;
+
 // 把 n 点实信号(已加窗)的幅度谱映射成 bands 个对数频段(0..1)。
-void dsp_bands(const int16_t *pcm, int n, int sample_rate, float *bands, int nbands);
+void dsp_bands(dsp_work_t *w, const int16_t *pcm, int n, int sample_rate, float *bands, int nbands);
 
 // 均方根电平换算的 dBFS(满幅正弦 ≈ -3 dBFS),以及显示用近似声压值(dBFS + 偏移)。
 float dsp_dbfs(const int16_t *pcm, int n);
 #define DSP_SPL_OFFSET 100.0f
 
 // 自相关(NSDF / McLeod)音高检测,返回 Hz,0 表示无明确音高;clarity 0..1。
-float dsp_pitch(const int16_t *pcm, int n, int sample_rate, float *clarity);
+float dsp_pitch(dsp_work_t *w, const int16_t *pcm, int n, int sample_rate, float *clarity);
 
 typedef struct {
     int midi;         // MIDI 音符号(A4 = 69)

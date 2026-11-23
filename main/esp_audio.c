@@ -6,6 +6,7 @@
 //   · 播放:接收 ADPCM 块(AI 回答、对讲)解码播放
 // I2S TX 配置了 auto_clear,只读麦克风不写时扬声器输出静音。
 #include "audio_dsp.h"
+#include <stdlib.h>
 #include "noise_gen.h"
 #include "settings.h"
 #include "svc.h"
@@ -123,7 +124,14 @@ static void play_beep(beep_t b)
 // ---------------------------------------------------------------------------
 // 分析
 // ---------------------------------------------------------------------------
-static int16_t s_win[ANALYZE_N];
+// 分析用的缓冲(采样窗 + 频谱 / 音高工作区,约 11KB)只在分析期间存在:
+// 由音频任务在开始分析时分配、停止后释放,其他任务不碰,没有竞态。
+typedef struct {
+    int16_t win[ANALYZE_N];
+    dsp_work_t dsp;
+} analysis_buf_t;
+static analysis_buf_t *s_an;
+#define s_win (s_an->win)
 static int s_win_fill;
 static float s_peak_db;
 
@@ -140,7 +148,7 @@ static void analyze_push(const int16_t *pcm, int n)
     if (skip % 4 && !do_pitch) return;
 
     audio_analysis_t r;
-    dsp_bands(s_win + ANALYZE_N - DSP_FFT_N, DSP_FFT_N, SR, r.bands, AUDIO_BANDS);
+    dsp_bands(&s_an->dsp, s_win + ANALYZE_N - DSP_FFT_N, DSP_FFT_N, SR, r.bands, AUDIO_BANDS);
     const float dbfs = dsp_dbfs(s_win + ANALYZE_N - CHUNK * 2, CHUNK * 2);
     r.db = dbfs + DSP_SPL_OFFSET;
     if (r.db < 20) r.db = 20;
@@ -150,7 +158,7 @@ static void analyze_push(const int16_t *pcm, int n)
     r.pitch_hz = s_result.pitch_hz;
     r.clarity = s_result.clarity;
     xSemaphoreGive(s_lock);
-    if (do_pitch) r.pitch_hz = dsp_pitch(s_win, ANALYZE_N, SR, &r.clarity);
+    if (do_pitch) r.pitch_hz = dsp_pitch(&s_an->dsp, s_win, ANALYZE_N, SR, &r.clarity);
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_result = r;
     s_result_fresh = true;
@@ -169,6 +177,18 @@ static void audio_task(void *arg)
     uint8_t block[ADPCM_BLOCK_BYTES];
 
     for (;;) {
+        // 分析缓冲:开始分析时才分配,停了就还回去
+        if (s_analyze && !s_an) {
+            s_an = calloc(1, sizeof(*s_an));
+            s_win_fill = 0;
+            if (!s_an) {
+                ESP_LOGW(TAG, "内存不足,频谱 / 调音暂停");
+                s_analyze = false;
+            }
+        } else if (!s_analyze && s_an) {
+            free(s_an);
+            s_an = NULL;
+        }
         acmd_t c;
         const bool busy = s_analyze || s_capture || s_metro_on || uxQueueMessagesWaiting(s_play)
                        || s_noise != NOISE_OFF || s_noise_playing != NOISE_OFF;
@@ -238,7 +258,7 @@ static void audio_task(void *arg)
             }
             const float lvl = sqrtf((float)peak / 32768.0f);
             s_level = s_level * 0.6f + lvl * 0.4f;
-            if (s_analyze) {
+            if (s_analyze && s_an) {
                 analyze_push(pcm, CHUNK);
                 taskYIELD();
             }

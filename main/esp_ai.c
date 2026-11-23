@@ -101,7 +101,7 @@ static void fail_stage(const char *stage, int status)
         bool ui_tight;
         local_tls_last(&free_k, &largest_k, &ui_tight);
         if (ui_tight) snprintf(msg, sizeof(msg), "%s:界面内存紧张", stage);
-        else snprintf(msg, sizeof(msg), "%s:内存不足 空闲%uK 最大%uK", stage, free_k, largest_k);
+        else snprintf(msg, sizeof(msg), "%s:内存不足(%uK/%uK)", stage, free_k, largest_k);
     } else {
         voice_error_text(msg, sizeof(msg), stage, status);
     }
