@@ -348,8 +348,12 @@ static esp_err_t open_cloud(esp_http_client_handle_t c, int len, const char *bas
     return e;
 }
 
+// big_download:要连续收大量数据(朗读音频,一句长回答几百 KB)。服务器的加密记录最大约 16KB,
+// 默认每收一条记录都要临时申请一块这么大的连续内存,用完再释放;界面同时在分配内存,
+// 几十次里只要有一次凑不出来,连接就断了,朗读停在前几个字("音频中途断了")。
+// 这类连接在握手后固定一块接收缓冲(ESP-IDF 的 RX_STATIC 策略),整段下载不再反复申请。
 static esp_http_client_handle_t open_direct(const char *base, const char *key, const char *path,
-                                            int timeout, int *err)
+                                            int timeout, bool big_download, int *err)
 {
     char url[160];
     snprintf(url, sizeof(url), "%s%s", base, path);
@@ -366,6 +370,7 @@ static esp_http_client_handle_t open_direct(const char *base, const char *key, c
         .buffer_size = 1024,
         .buffer_size_tx = 1024,
         .crt_bundle_attach = strncmp(url, "https", 5) == 0 ? esp_crt_bundle_attach : NULL,
+        .tls_dyn_buf_strategy = big_download ? HTTP_TLS_DYN_BUF_RX_STATIC : 0,
     };
     esp_http_client_handle_t c = esp_http_client_init(&cfg);
     if (!c) return NULL;
@@ -414,7 +419,7 @@ static int direct_asr(char *text, size_t len)
     const char *base, *key;
     voice_endpoint(&base, &key);
     int err;
-    esp_http_client_handle_t c = open_direct(base, key, "/audio/transcriptions", 30000, &err);
+    esp_http_client_handle_t c = open_direct(base, key, "/audio/transcriptions", 30000, false, &err);
     if (!c) return err;
     esp_http_client_set_header(c, "Content-Type", "multipart/form-data; boundary=" BOUNDARY);
     char head[320];
@@ -533,7 +538,7 @@ static int direct_chat(const char *question, char *answer, size_t len)
 
     int err;
     esp_http_client_handle_t c = open_direct(g_settings.api_base, g_settings.api_key, "/chat/completions",
-                                             45000, &err);
+                                             45000, false, &err);
     int status = err;
     char *resp = NULL;
     int got = 0;
@@ -634,7 +639,7 @@ static void direct_speak(const char *text)
     char *body = cJSON_PrintUnformatted(req);
     cJSON_Delete(req);
     int err = VOICE_ERR_MEM;
-    esp_http_client_handle_t c = body ? open_direct(base, key, "/audio/speech", 30000, &err) : NULL;
+    esp_http_client_handle_t c = body ? open_direct(base, key, "/audio/speech", 30000, true, &err) : NULL;
     int status = err;
     if (c) {
         esp_http_client_set_header(c, "Content-Type", "application/json");
