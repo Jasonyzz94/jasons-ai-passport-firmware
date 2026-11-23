@@ -15,7 +15,7 @@
 
 #define MAX_TURNS 3
 #define Q_LEN 160
-#define A_LEN 640
+#define A_LEN 1024   // 与 esp_ai.c 的 ANSWER_MAX 一致(约 340 个汉字)
 #define SHORT_PRESS_MS 350
 
 typedef struct {

@@ -50,6 +50,10 @@ bool voice_url_is_lan(const char *url);
 #define VOICE_WAV_HEADER_BYTES 60
 void voice_ima_wav_header(uint8_t h[VOICE_WAV_HEADER_BYTES], uint32_t blocks);
 
+// 回答放不下时在句子结尾截断并加"…"(在后半段找不到句末标点才按字符截断),
+// 不会停在半句话、半个汉字上。放得下就原样拷贝。返回写入的字节数。cap 至少 8。
+size_t voice_trim_answer(char *dst, size_t cap, const char *src);
+
 // 按 UTF-8 字符边界拷贝:放不下时在完整字符处截断,不会留下半个汉字。返回写入的字节数。
 size_t utf8_copy(char *dst, size_t cap, const char *src);
 

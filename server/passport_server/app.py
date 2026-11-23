@@ -140,7 +140,8 @@ async def talk(request: web.Request) -> web.Response:
         return web.json_response({"error": str(exc)}, status=502)
     if result is None:
         raise web.HTTPUnprocessableEntity(text="no speech")
-    return web.json_response(result)
+    # 直接发 UTF-8:默认的 \\uXXXX 转义让每个汉字占 6 字节,长回答会撑爆设备的接收缓冲。
+    return web.json_response(result, dumps=lambda o: json.dumps(o, ensure_ascii=False))
 
 
 async def talk_audio(request: web.Request) -> web.StreamResponse:

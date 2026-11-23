@@ -154,6 +154,31 @@ size_t utf8_copy(char *dst, size_t cap, const char *src)
     return n;
 }
 
+size_t voice_trim_answer(char *dst, size_t cap, const char *src)
+{
+    static const char ell[] = "…";   // 3 字节
+    if (strlen(src) < cap) return utf8_copy(dst, cap, src);
+    // 留出省略号的位置,先按字符截
+    size_t n = utf8_copy(dst, cap - (sizeof(ell) - 1), src);
+    // 往回找句末标点(。!?;及换行),只在后半段找,免得砍掉太多
+    static const char *const ends[] = {"。", "！", "？", "；", "!", "?", ";", "\n"};
+    size_t best = 0;
+    for (size_t i = 0; i < sizeof(ends) / sizeof(ends[0]); i++) {
+        const size_t el = strlen(ends[i]);
+        for (size_t k = n; k >= el && k > n / 2; k--) {
+            if (!memcmp(dst + k - el, ends[i], el)) {
+                if (k > best) best = k;
+                break;
+            }
+        }
+    }
+    if (best) {
+        n = best;   // 停在完整的一句话后面
+    }
+    memcpy(dst + n, ell, sizeof(ell));   // 带上结尾的 0
+    return n + sizeof(ell) - 1;
+}
+
 size_t resample24_to16(resample24_t *st, const int16_t *in, size_t n, int16_t *out)
 {
     size_t o = 0;

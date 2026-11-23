@@ -40,7 +40,8 @@ static TaskHandle_t s_task;
 static SemaphoreHandle_t s_lock;
 static char s_error[64];
 static bool s_last_direct; // 上一条回答来自云端直连(重播时用)
-static char s_q[160], s_a[640];
+#define ANSWER_MAX 1024   // 约 340 个汉字:够放提示词允许的"详细时 300 字以内"
+static char s_q[160], s_a[ANSWER_MAX];
 static bool s_result_ready;
 static char s_audio_id[40];
 static bool s_turn_direct;       // 这一轮走云端直连
@@ -157,8 +158,8 @@ static void parse_reply(const char *body)
     const cJSON *a = cJSON_GetObjectItemCaseSensitive(j, "answer");
     const cJSON *id = cJSON_GetObjectItemCaseSensitive(j, "audio");
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    utf8_copy(s_q, sizeof(s_q), cJSON_IsString(q) ? q->valuestring : "(没听清)");
-    utf8_copy(s_a, sizeof(s_a), cJSON_IsString(a) ? a->valuestring : "");
+    utf8_copy(s_q, sizeof(s_q), cJSON_IsString(q) ? q->valuestring : j ? "(没听清)" : "(回复不完整)");
+    voice_trim_answer(s_a, sizeof(s_a), cJSON_IsString(a) ? a->valuestring : "");
     snprintf(s_audio_id, sizeof(s_audio_id), "%s", cJSON_IsString(id) ? id->valuestring : "");
     s_result_ready = true;
     xSemaphoreGive(s_lock);
@@ -250,22 +251,31 @@ static void talk(void)
     write_chunk(c, NULL, 0);   // 结束块
     esp_http_client_fetch_headers(c);
     const int status = esp_http_client_get_status_code(c);
-    static char resp[1536];
+    // 回复 JSON:旧版中转把每个汉字转成 6 字节的 \uXXXX,以前 1536 字节的缓冲装不下长回答,
+    // JSON 被截断后解析失败,屏幕上只剩"…"。现在用时才分配,300 字的回答按旧格式也放得下。
+    enum { RELAY_RESP_MAX = 3072 };
+    char *resp = malloc(RELAY_RESP_MAX);
     int got = 0, r;
-    while (got < (int)sizeof(resp) - 1 &&
-           (r = esp_http_client_read(c, resp + got, (int)sizeof(resp) - 1 - got)) > 0) {
+    while (resp && got < RELAY_RESP_MAX - 1 && (r = esp_http_client_read(c, resp + got, RELAY_RESP_MAX - 1 - got)) > 0) {
         got += r;
     }
-    resp[got] = '\0';
+    if (resp) resp[got] = '\0';
     esp_http_client_close(c);
     esp_http_client_cleanup(c);
+    if (!resp) {
+        fail("内存不足");
+        return;
+    }
+    if (status == 200 && got >= RELAY_RESP_MAX - 1) ESP_LOGW(TAG, "中转回复超过 %d 字节,被截断", RELAY_RESP_MAX);
     if (s_cancel) {
+        free(resp);
         s_state = AI_IDLE;
         return;
     }
     if (status != 200) {
         // 中转会在 {"error": "..."} 里说明是哪一步出错(识别 / 对话 / 朗读)
         cJSON *j = cJSON_Parse(resp);
+        free(resp);
         const cJSON *e = cJSON_GetObjectItemCaseSensitive(j, "error");
         if (cJSON_IsString(e) && e->valuestring[0]) fail(e->valuestring);
         else if (status == 401) fail("中转未授权本设备");
@@ -276,12 +286,15 @@ static void talk(void)
     }
     s_last_direct = false;
     parse_reply(resp);
-    speak();
-    // 中转的朗读失败时文字照常显示,另外提示是哪一步出的问题
+    // 中转的朗读失败时文字照常显示,另外提示是哪一步出的问题(先取出来,朗读前就释放回复)
+    char tts_err[64] = "";
     cJSON *j = cJSON_Parse(resp);
+    free(resp);
     const cJSON *te = cJSON_GetObjectItemCaseSensitive(j, "tts_error");
-    if (cJSON_IsString(te) && te->valuestring[0] && !s_cancel) fail(te->valuestring);
+    if (cJSON_IsString(te)) utf8_copy(tts_err, sizeof(tts_err), te->valuestring);
     cJSON_Delete(j);
+    speak();
+    if (tts_err[0] && !s_cancel) fail(tts_err);
 }
 
 // ===========================================================================
@@ -293,7 +306,8 @@ static void talk(void)
 // ===========================================================================
 #define BOUNDARY "----passport7c3boundary"
 #define DIRECT_SYSTEM "你是装在随身小设备里的中文语音助手,回答会被朗读并显示在小屏幕上。" \
-    "用简体中文口语回答,先给结论,通常一到三句话、不超过 120 字,不要用 Markdown、列表或表情。"
+    "用简体中文口语回答,先给结论,通常一到三句话、不超过 120 字;用户明确要求详细时可以多说," \
+    "但控制在 300 字以内。不要用 Markdown、列表或表情。"
 #define CHAT_RESP_MAX 6144
 
 static char s_hist_q[2][160], s_hist_a[2][320];
@@ -484,7 +498,7 @@ static int direct_chat(const char *question, char *answer, size_t len)
 {
     cJSON *req = cJSON_CreateObject();
     cJSON_AddStringToObject(req, "model", g_settings.llm_model);
-    cJSON_AddNumberToObject(req, "max_tokens", 400);
+    cJSON_AddNumberToObject(req, "max_tokens", 600);   // 300 个汉字约 300~450 个 token,留余量
     cJSON_AddBoolToObject(req, "stream", false);
     cJSON *msgs = cJSON_AddArrayToObject(req, "messages");
     add_msg(msgs, "system", DIRECT_SYSTEM);
@@ -526,8 +540,17 @@ static int direct_chat(const char *question, char *answer, size_t len)
             const cJSON *ch = cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(j, "choices"), 0);
             const cJSON *msg = cJSON_GetObjectItemCaseSensitive(ch, "message");
             const cJSON *content = cJSON_GetObjectItemCaseSensitive(msg, "content");
-            if (cJSON_IsString(content) && content->valuestring[0]) utf8_copy(answer, len, content->valuestring);
-            else status = VOICE_ERR_PARSE;
+            const cJSON *fin = cJSON_GetObjectItemCaseSensitive(ch, "finish_reason");
+            if (cJSON_IsString(content) && content->valuestring[0]) {
+                const char *text = content->valuestring;
+                const size_t tl = strlen(text);
+                // 模型因 max_tokens 停在半句(finish_reason=length):退回到最后一个完整句子
+                const bool cut = cJSON_IsString(fin) && !strcmp(fin->valuestring, "length") && tl >= 8;
+                voice_trim_answer(answer, cut && tl < len ? tl : len, text);
+                if (cut) ESP_LOGW(TAG, "回答被 max_tokens 截断,已停在完整句子");
+            } else {
+                status = VOICE_ERR_PARSE;
+            }
             cJSON_Delete(j);
         }
         if (status != 200) ESP_LOGW(TAG, "对话失败 %d: %.200s", status, resp);
@@ -664,7 +687,7 @@ static void direct_talk(void)
         return;
     }
     s_state = AI_THINKING;
-    static char answer[640];
+    static char answer[ANSWER_MAX];
     const int cst = direct_chat(question, answer, sizeof(answer));
     if (s_cancel) {   // 思考时按了取消:不显示也不朗读
         s_state = AI_IDLE;

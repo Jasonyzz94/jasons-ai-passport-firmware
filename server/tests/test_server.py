@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from passport_server import adpcm, board, discovery, weather  # noqa: E402
 from passport_server.app import create_app  # noqa: E402
 from passport_server.assistant import (LLM, TTS, Conversation, StageError, http_reason,  # noqa: E402
-                                       resample, speakable)
+                                       resample, speakable, trim_answer)
 from passport_server.config import Config  # noqa: E402
 from passport_server.home import item_from_state  # noqa: E402
 
@@ -275,6 +275,21 @@ class CloudTTSTest(unittest.TestCase):
         self.assertEqual(str(ctx.exception), "朗读:密钥无效")
 
 
+class TrimAnswerTest(unittest.TestCase):
+    def test_short_answer_unchanged(self) -> None:
+        self.assertEqual(trim_answer("晴,二十度。"), "晴,二十度。")
+
+    def test_long_answer_stops_after_a_sentence(self) -> None:
+        text = "第一句话说完了。" * 50
+        out = trim_answer(text, 30)
+        self.assertLessEqual(len(out), 30)
+        self.assertTrue(out.endswith("。…"))
+
+    def test_no_sentence_end_cuts_by_character(self) -> None:
+        out = trim_answer("一" * 100, 30)
+        self.assertEqual(out, "一" * 29 + "…")
+
+
 class ApiTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -316,6 +331,21 @@ class ApiTest(unittest.IsolatedAsyncioTestCase):
         data = await r.read()
         self.assertGreater(len(data), 0)
         self.assertEqual(len(adpcm.decode_stream(data)), 1000)
+
+    async def test_talk_reply_is_utf8_and_capped(self) -> None:
+        r = await self.client.post("/api/pair", json={"device": "A3F2", "name": "Passport-A3F2"})
+        auth = {"Authorization": f"Bearer {(await r.json())['token']}"}
+        self.app["assistant"].llm.answer = mock.AsyncMock(return_value="很长的一句回答。" * 80)
+        audio = b"".join(adpcm.encode_stream(tone(16000)))
+        r = await self.client.post("/api/assistant/talk", headers=auth, data=audio)
+        raw = await r.read()
+        # 汉字直接用 UTF-8 发,不再是 6 字节的 \\uXXXX;回答不超过 300 字,停在句末
+        self.assertNotIn(b"\\u", raw)
+        self.assertIn("很长的一句回答".encode(), raw)
+        answer = (await r.json())["answer"]
+        self.assertLessEqual(len(answer), 300)
+        self.assertTrue(answer.endswith("。…"))
+        self.assertLess(len(raw), 3072)   # 设备的接收缓冲
 
     async def test_stage_errors_reach_device(self) -> None:
         r = await self.client.post("/api/pair", json={"device": "C1", "name": "x"})

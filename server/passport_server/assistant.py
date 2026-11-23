@@ -328,6 +328,21 @@ class TTS:
 
 
 # ---------------------------------------------------------------------------
+MAX_ANSWER_CHARS = 300
+_SENTENCE_ENDS = "。！？；!?;\n"
+
+
+def trim_answer(text: str, limit: int = MAX_ANSWER_CHARS) -> str:
+    """超过 limit 个字时停在最后一个完整句子后面并加"…";后半段没有句末标点才按字截。"""
+    if len(text) <= limit:
+        return text
+    head = text[: limit - 1]
+    cut = max(head.rfind(ch) for ch in _SENTENCE_ENDS)
+    if cut >= len(head) // 2:
+        head = head[: cut + 1]
+    return head + "…"
+
+
 class Assistant:
     MIN_SAMPLES = RATE // 4   # 少于 0.25 秒的录音当作误触
 
@@ -353,7 +368,7 @@ class Assistant:
         if not question:
             return None
         t1 = time.time()
-        answer = await self.llm.answer(device, question, session)
+        answer = trim_answer(await self.llm.answer(device, question, session))   # 设备最多显示约 340 字
         t2 = time.time()
         audio_id = ""
         tts_error = ""

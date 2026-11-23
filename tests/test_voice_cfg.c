@@ -145,6 +145,22 @@ static void test_wav_header(void)
     assert(h[56] == (1320 & 0xFF) && h[57] == (1320 >> 8));
 }
 
+static void test_trim_answer(void)
+{
+    char out[64];
+    // 放得下:原样
+    assert(voice_trim_answer(out, sizeof(out), "今天晴。") == strlen("今天晴。") && !strcmp(out, "今天晴。"));
+    // 放不下:停在最后一个完整句子后面,加省略号
+    const char *long_a = "第一句话说完了。第二句话也说完了。第三句话还没有说完就被截断了呢真的很长很长";
+    size_t n = voice_trim_answer(out, sizeof(out), long_a);
+    assert(n < sizeof(out) && n == strlen(out));
+    assert(!strcmp(out, "第一句话说完了。第二句话也说完了。…"));
+    // 后半段没有句末标点:按字符截,不留半个汉字
+    const char *no_stop = "一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十";
+    voice_trim_answer(out, 20, no_stop);
+    assert(strlen(out) < 20 && !strcmp(out, "一二三四五…"));
+}
+
 int main(void)
 {
     test_mode();
@@ -154,6 +170,7 @@ int main(void)
     test_resample();
     test_transport();
     test_wav_header();
+    test_trim_answer();
     puts("voice cfg tests: PASS");
     return 0;
 }
