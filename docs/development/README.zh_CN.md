@@ -23,6 +23,7 @@
 ## 应用交接
 
 - [随身工具箱开发交接](toolbox-handoff.zh_CN.md)记录离线天气、扫码配置、多个 Wi-Fi 和语音助手的改进与验收方案。
+- [macOS 蓝牙 HID 配对交接](ble-macos-pairing-handoff.zh_CN.md)记录未绑定连接的诊断、必须实施的安全修复和真实按键验收标准。
 
 ## 工程约定（engineering）
 

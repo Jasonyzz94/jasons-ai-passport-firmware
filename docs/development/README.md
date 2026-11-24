@@ -14,6 +14,7 @@ This directory contains AI Passport engineering rules and reusable workflows, gr
 ## Application handoffs
 
 - [Pocket toolbox development handoff](toolbox-handoff.md) covers offline weather, QR setup, Wi-Fi profiles, and voice configuration.
+- [macOS BLE HID pairing handoff](ble-macos-pairing-handoff.md) records the unbonded-connection diagnosis, required security fixes, and real-input acceptance criteria.
 
 ## Engineering
 
