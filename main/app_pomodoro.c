@@ -71,6 +71,7 @@ static void raise_alert(pomo_event_t ev)
                  pomo_phase_name(s_pomo.phase), pomo_minutes(&s_pomo, s_pomo.phase));
         shell_alert(PIXEL_THEMES[s_theme].focus[0], C_TOMATO, "专注完成！", detail, alert_closed);
         audio_beep(BEEP_WORK_DONE);
+        pet_give(PET_GIFT_POMODORO);   // 宠物也跟着吃顿好的
     } else {
         snprintf(detail, sizeof(detail), s_pomo.auto_next ? "下一个专注已自动开始"
                                                           : "准备好了就按确定键开始专注");

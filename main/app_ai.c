@@ -301,6 +301,7 @@ static void tick(int64_t now)
     if (ai_take_result(q, sizeof(q), a, sizeof(a))) {
         push_turn(q, a);
         render_chat();
+        pet_give(PET_GIFT_CHAT);
     }
 }
 

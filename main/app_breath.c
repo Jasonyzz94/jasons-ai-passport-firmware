@@ -180,6 +180,7 @@ static void tick(int64_t now)
         s_state = ST_DONE;
         shell_keep_awake(false);
         audio_beep(BEEP_BREAK_DONE);
+        pet_give(PET_GIFT_BREATH);   // 宠物陪你一起平静下来
         hints();
     }
     render(now);

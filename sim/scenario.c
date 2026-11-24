@@ -64,6 +64,9 @@ void sim_scenario(void (*shot)(const char *), void (*key)(sys_key_t, sys_key_ev_
     CLICK(OK); CLICK(DOWN); CLICK(OK); CLICK(OK);
     run_ms(300);
     shot("19b_pet_hatched");
+    LONG(DOWN);
+    shot("19bb_pet_dex");
+    CLICK(OK);
     LONG(UP);
     open_app(&APP_BREATH);
     shot("19c_breath_idle");

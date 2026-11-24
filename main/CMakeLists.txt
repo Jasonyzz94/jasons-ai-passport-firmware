@@ -6,7 +6,7 @@ file(GLOB TOOLBOX_SRCS
 idf_component_register(
     SRCS ${TOOLBOX_SRCS}
          "shell.c" "ui.c" "icons.c" "pixel_art.c" "settings.c"
-         "pomodoro.c" "audio_dsp.c" "hid_keymap.c" "link_proto.c" "weather_shape.c" "noise_gen.c" "ics_parse.c" "pet.c" "breath.c" "voice_cfg.c" "wifi_list.c"
+         "pomodoro.c" "audio_dsp.c" "hid_keymap.c" "link_proto.c" "weather_shape.c" "noise_gen.c" "ics_parse.c" "pet.c" "pet_art.c" "breath.c" "voice_cfg.c" "wifi_list.c"
     INCLUDE_DIRS "."
     REQUIRES bsp esp_timer nvs_flash esp_wifi esp_netif esp_event esp_http_client
              esp_http_server json lwip bt esp_hid mbedtls

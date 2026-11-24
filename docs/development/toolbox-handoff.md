@@ -4,7 +4,7 @@
 
 # Pocket toolbox development handoff
 
-The review is based on commit `a92d1f2` on branch `ccr-75ff76be-rli4x3`. The changes below are pending. The breathing and pixel pet apps are enabled in a separate local build. That build was flashed and reached `app_main()`; menu navigation and app interactions still need device acceptance.
+The review is based on commit `a92d1f2` on branch `ccr-75ff76be-rli4x3`. The changes below are pending. The breathing and pixel pet apps are in the launcher. The pet has four species (Dango, Penguin, Dino, Bunny) and five stages (egg, baby, teen, adult, elder); each evolution needs both experience and days. A high care score at adulthood gives the shiny form, adult forms seen are kept in a collection, and an elder can leave a new egg for the next generation. Finishing a pomodoro or a breathing session and getting a voice-assistant answer reward the pet. Rules are in the [pet logic](../../main/pet.c) with host tests; menu navigation and app interactions still need device acceptance.
 
 ## 1. Keep the last valid weather snapshot
 
