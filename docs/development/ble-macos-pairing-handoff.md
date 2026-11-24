@@ -11,7 +11,7 @@ This handoff applies to commit `ba8a9ab183d680ace53131de7062c12a53e953dd` on bra
 - Build: PASS, including the merged-image and debug-archive checks.
 - Host tests: PASS. Server Python tests were skipped because their dependencies were not installed in the build environment.
 - Device tests: firmware boot and BLE diagnosis completed; full application acceptance remains pending.
-- No pairing fix has been applied yet. This document records the required implementation and acceptance work.
+- At that baseline no pairing fix had been applied. The follow-up change implements the items under [Required implementation](#required-implementation): `CONFIG_BT_NIMBLE_SM_LVL=2`, peripheral-initiated security with the decision policy in `main/ble_sec.c` (host-tested by `tests/test_ble_sec.c`), the GAP name and appearance set after HID initialization, and the DIS model number `Passport`. The remote page reports “connected” only after the link is encrypted. Build and host tests pass; [Device acceptance](#device-acceptance) on macOS and a phone is still pending.
 
 The relay-server discovery and authentication work is a separate issue and is not covered by this BLE handoff.
 

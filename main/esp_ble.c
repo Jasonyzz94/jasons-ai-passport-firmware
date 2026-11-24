@@ -2,7 +2,10 @@
 //
 // 配对方式:Just Works + 绑定(设备无输入能力),电脑/手机在蓝牙列表里点一下即可;
 // 绑定信息存 NVS(CONFIG_BT_NIMBLE_NVS_PERSIST),下次自动回连。
+// HID 特征要求加密(CONFIG_BT_NIMBLE_SM_LVL=2),连接建立后外设主动发起配对(见 ble_sec.h):
+// macOS 不会自己发起,只连 GATT 不加密时系统设置会一直停在"正在连接"。
 // 发送动作在独立的 hid 任务里排队执行(每次按键需要按下 → 间隔 → 抬起)。
+#include "ble_sec.h"
 #include "hid_keymap.h"
 #include "sys.h"
 #include "settings.h"
@@ -19,6 +22,7 @@
 #include "host/util/util.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
+#include "services/dis/ble_svc_dis.h"
 #include "services/gap/ble_svc_gap.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -88,6 +92,7 @@ static volatile bool s_stop_pending;   // 已请求关闭、hid 任务还没处�
 bool ble_radio_busy(void) { return s_stop_pending || s_state == BLE_STARTING; }
 static struct ble_hs_adv_fields s_fields;
 static char s_name[24];
+static ble_sec_t s_sec;   // 当前连接的加密状态(只在 NimBLE 主机任务里改)
 
 static char s_error[48];            // 最近一次失败原因(界面显示)
 static volatile int64_t s_start_ms;  // 进入 BLE_STARTING 的时间,用于启动超时
@@ -132,15 +137,66 @@ static void adv_start(void)
     }
 }
 
+// 发起一次安全请求。对端已在配对中(BLE_HS_EALREADY)也算成功。
+static void sec_initiate(uint16_t conn)
+{
+    const int rc = ble_gap_security_initiate(conn);
+    const bool ok = rc == 0 || rc == BLE_HS_EALREADY;
+    if (ok) ESP_LOGI(TAG, "发起配对(连接 %u)", conn);
+    else ESP_LOGW(TAG, "发起配对失败 %d,等待对端访问加密特征时再配对", rc);
+    ble_sec_on_initiate_result(&s_sec, ok);
+}
+
+static void sec_apply(ble_sec_action_t act, uint16_t conn)
+{
+    struct ble_gap_conn_desc desc;
+    switch (act) {
+    case BLE_SEC_INITIATE: sec_initiate(conn); break;
+    case BLE_SEC_FORGET_RETRY:
+        // 对端删了配对、本机还留着旧绑定:丢掉旧绑定重新配对一次。
+        ESP_LOGW(TAG, "对端没有旧密钥,删除本地旧绑定后重新配对");
+        if (ble_gap_conn_find(conn, &desc) == 0) ble_store_util_delete_peer(&desc.peer_id_addr);
+        sec_initiate(conn);
+        break;
+    case BLE_SEC_DISCONNECT:
+        ESP_LOGW(TAG, "配对失败,断开连接后重新广播");
+        ble_gap_terminate(conn, BLE_ERR_AUTH_FAIL);
+        break;
+    default: break;
+    }
+}
+
 static int gap_event(struct ble_gap_event *event, void *arg)
 {
     (void)arg;
     struct ble_gap_conn_desc desc;
     switch (event->type) {
-    case BLE_GAP_EVENT_CONNECT:
-        if (event->connect.status != 0) adv_start();
+    case BLE_GAP_EVENT_CONNECT: {
+        if (event->connect.status != 0) {
+            adv_start();
+            return 0;
+        }
+        const uint16_t conn = event->connect.conn_handle;
+        const bool enc = ble_gap_conn_find(conn, &desc) == 0 && desc.sec_state.encrypted;
+        sec_apply(ble_sec_on_connect(&s_sec, enc), conn);
+        if (enc) s_state = BLE_CONNECTED;
         return 0;
+    }
+    case BLE_GAP_EVENT_ENC_CHANGE: {
+        const int st = event->enc_change.status;
+        const uint16_t conn = event->enc_change.conn_handle;
+        const bool key_missing = st == BLE_HS_ERR_HCI_BASE + BLE_ERR_PINKEY_MISSING;
+        bool bonded = false;
+        if (st == 0 && ble_gap_conn_find(conn, &desc) == 0) bonded = desc.sec_state.bonded;
+        if (st == 0) ESP_LOGI(TAG, "链路已加密%s", bonded ? ",已绑定" : "");
+        else ESP_LOGW(TAG, "加密失败 %d", st);
+        sec_apply(ble_sec_on_enc_change(&s_sec, st == 0, key_missing), conn);
+        if (ble_sec_ready(&s_sec)) s_state = BLE_CONNECTED;
+        return 0;
+    }
     case BLE_GAP_EVENT_DISCONNECT:
+        ESP_LOGI(TAG, "连接断开 0x%x", event->disconnect.reason);
+        ble_sec_on_disconnect(&s_sec);
         s_state = BLE_ADVERTISING;
         adv_start();
         return 0;
@@ -165,7 +221,11 @@ static void hidd_event(void *handler_args, esp_event_base_t base, int32_t id, vo
     (void)data;
     switch ((esp_hidd_event_t)id) {
     case ESP_HIDD_START_EVENT: adv_start(); break;
-    case ESP_HIDD_CONNECT_EVENT: s_state = BLE_CONNECTED; ESP_LOGI(TAG, "已连接"); break;
+    case ESP_HIDD_CONNECT_EVENT:
+        // GATT 连上不等于配对完成:链路加密后才算"已连接"(见 gap_event 的 ENC_CHANGE)。
+        if (ble_sec_ready(&s_sec)) s_state = BLE_CONNECTED;
+        ESP_LOGI(TAG, "HID 已连接%s", ble_sec_ready(&s_sec) ? "" : ",等待配对加密");
+        break;
     case ESP_HIDD_DISCONNECT_EVENT: s_state = BLE_ADVERTISING; adv_start(); break;
     default: break;
     }
@@ -317,8 +377,7 @@ static bool do_start(void)
         return false;
     }
     snprintf(s_name, sizeof(s_name), "%s", g_settings.name);
-    ble_svc_gap_device_name_set(s_name);
-    ble_svc_gap_device_appearance_set(ESP_HID_APPEARANCE_KEYBOARD);
+    memset(&s_sec, 0, sizeof(s_sec));
 
     memset(&s_fields, 0, sizeof(s_fields));
     static const ble_uuid16_t hid_uuid = BLE_UUID16_INIT(0x1812);
@@ -371,6 +430,11 @@ static bool do_start(void)
         fail(herr == ESP_ERR_NO_MEM ? "键盘服务失败:内存不足" : "键盘服务初始化失败");
         return false;
     }
+    // esp_hidd_dev_init 内部会调 ble_svc_gap_init(),把设备名重置成默认的 "nimble":
+    // 必须在它之后、开始广播之前设置,否则 Mac 读到的名字和广播里的不一致。
+    ble_svc_gap_device_name_set(s_name);
+    ble_svc_gap_device_appearance_set(ESP_HID_APPEARANCE_KEYBOARD);
+    ble_svc_dis_model_number_set("Passport");   // 默认是协议栈名 "NimBLE"
     ble_store_config_init();
     s_running = true;
     nimble_port_freertos_init(host_task);

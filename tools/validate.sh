@@ -125,6 +125,9 @@ run_static_checks() {
         tests/test_hid_keymap.c main/hid_keymap.c -o "${test_dir}/test_hid_keymap"
     "${test_dir}/test_hid_keymap"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_ble_sec.c main/ble_sec.c -o "${test_dir}/test_ble_sec"
+    "${test_dir}/test_ble_sec"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/test_link_proto.c main/link_proto.c main/audio_dsp.c -lm -o "${test_dir}/test_link_proto"
     "${test_dir}/test_link_proto"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
