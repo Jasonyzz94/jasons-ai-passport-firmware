@@ -134,7 +134,10 @@ static void play_block(const uint8_t *b, size_t len)
 static void sink(const uint8_t *block, size_t len, void *user)
 {
     (void)user;
-    if (s_stream) xStreamBufferSend(s_stream, block, len, 0);   // 满了就丢,不阻塞音频任务
+    // 满了就整块丢,不阻塞音频任务。不能只塞进半块:读的一方按 132 字节一块切分,
+    // 半块会让之后所有块错位,后面的录音全变成杂音。
+    StreamBufferHandle_t st = s_stream;
+    if (st && xStreamBufferSpacesAvailable(st) >= len) xStreamBufferSend(st, block, len, 0);
 }
 
 static esp_http_client_handle_t open_client(const char *path, esp_http_client_method_t method, int timeout)
@@ -255,7 +258,12 @@ static void talk(void)
         track_level();
         if (s_cancel) break;
         if (sys_now_ms() - started > MAX_TALK_MS) s_end = true;   // 最长 30 秒
-        if (!s_rec_ms && s_end) s_rec_ms = sys_now_ms() - started;
+        if (!s_rec_ms && s_end) {
+            // 松手:马上关麦,只把缓冲里已经录下的发完。以前麦克风一直开着,每 16ms 又进来
+            // 一块,"缓冲空了才结束"几乎永远不成立,松手后一直录到 30 秒上限。
+            s_rec_ms = sys_now_ms() - started;
+            audio_capture_stop();
+        }
         if (s_end && !n && xStreamBufferIsEmpty(s_stream)) break;
     }
     if (!s_rec_ms) s_rec_ms = sys_now_ms() - started;
@@ -479,7 +487,10 @@ static int direct_asr(char *text, size_t len)
         }
         track_level();
         if (s_cancel) break;
-        if (!s_rec_ms && s_end) s_rec_ms = sys_now_ms() - started;
+        if (!s_rec_ms && s_end) {
+            s_rec_ms = sys_now_ms() - started;
+            audio_capture_stop();   // 松手:马上关麦,只把已经录下的发完(见中转 talk())
+        }
         if (s_end && !n && xStreamBufferIsEmpty(s_stream)) break;
     }
     if (sent >= DIRECT_MAX_BLOCKS) s_end = true;   // 说满 15 秒:自动结束

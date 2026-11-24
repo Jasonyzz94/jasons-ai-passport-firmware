@@ -45,8 +45,13 @@ static lv_obj_t *bubble(lv_obj_t *parent, const char *text, bool mine)
     lv_obj_t *wrap = ui_box(parent, 0, 0, UI_W - 2 * UI_PAD, LV_SIZE_CONTENT);
     lv_obj_t *b = ui_label(wrap, &ui_font_16, mine ? C_BG : C_TEXT, text);
     lv_label_set_long_mode(b, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_max_width(b, UI_W - 2 * UI_PAD - 28, 0);
-    lv_obj_set_width(b, LV_SIZE_CONTENT);
+    // 宽度"随内容 + 最大宽度"时 LVGL 算高度不按换行后的行数,长回答最后一两行被裁掉。
+    // 先量单行宽度:放得下就用它,放不下就用固定的最大宽度,让高度按真实换行计算。
+    const int32_t max_w = UI_W - 2 * UI_PAD - 28;
+    lv_point_t one_line;
+    lv_text_get_size(&one_line, text, &ui_font_16, 0, 3, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    const int32_t want = one_line.x + 2 * 12 + 2;   // 左右内边距 12
+    lv_obj_set_width(b, want < max_w ? want : max_w);
     lv_obj_set_style_bg_color(b, ui_c(mine ? C_AI : C_SURFACE2), 0);
     lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(b, 14, 0);
@@ -249,7 +254,8 @@ static bool key(sys_key_t k, sys_key_ev_t ev)
         return true;
     }
     if (ev == SYS_EV_CLICK) {
-        lv_obj_scroll_by_bounded(s_chat, 0, k == SYS_KEY_DOWN ? -60 : 60, LV_ANIM_ON);
+        // 一次翻大半屏(对话区高 162,留 32 像素重叠接着读);以前 60 像素,长回答要按十来次。
+        lv_obj_scroll_by_bounded(s_chat, 0, k == SYS_KEY_DOWN ? -130 : 130, LV_ANIM_ON);
         return true;
     }
     if (k == SYS_KEY_DOWN && ev == SYS_EV_LONG) {
