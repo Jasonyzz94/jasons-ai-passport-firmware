@@ -106,6 +106,9 @@ static const voice_key_t k_voice_keys[] = {
     {"右 Option", 0x40},
 };
 #define VOICE_KEY_COUNT ((int)(sizeof(k_voice_keys) / sizeof(k_voice_keys[0])))
+// 没选过时默认右 Command:Mac 对第三方键盘的 Fn 不一定认,右 Command 真机验证可触发语音输入。
+// 已保存的选择("r_vk2")不受影响。
+#define VOICE_KEY_DEFAULT 4
 static bool s_down_voice = true;
 static int s_voice_key;
 static bool s_holding;
@@ -252,8 +255,8 @@ static void create(lv_obj_t *root)
 {
     s_root = root;
     s_down_voice = sys_kv_get_i32("r_dv", 1) != 0;
-    s_voice_key = sys_kv_get_i32("r_vk2", 0);
-    if (s_voice_key < 0 || s_voice_key >= VOICE_KEY_COUNT) s_voice_key = 0;
+    s_voice_key = sys_kv_get_i32("r_vk2", VOICE_KEY_DEFAULT);
+    if (s_voice_key < 0 || s_voice_key >= VOICE_KEY_COUNT) s_voice_key = VOICE_KEY_DEFAULT;
     s_holding = false;
     s_page = NULL;
     build(PAGE_MODES);

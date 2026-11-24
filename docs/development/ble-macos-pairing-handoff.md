@@ -67,6 +67,8 @@ In programming-assistant mode, the down button defaults to the configurable voic
 
 Voice-input activation is owned by the target operating system or application. Delivering a modifier does not guarantee activation: the app may require a hold, a double tap, a different modifier, or a combination such as a modifier plus a letter. System dictation may also be disabled independently. Match the Passport action to the target app's actual shortcut before changing firmware.
 
+To use Right Command, choose **Voice key → Right Command** on the mode-selection page; the choice is saved in NVS. Firmware now defaults an unsaved voice key to Right Command instead of Fn, because macOS may ignore Fn from third-party keyboards. Devices with a saved choice keep it.
+
 ## Remaining acceptance
 
 - After changing **▼ key purpose → Down ↓**, verify a real macOS `DownArrow` event.

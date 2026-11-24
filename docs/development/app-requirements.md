@@ -45,7 +45,8 @@ and acceptance status; hardware limits are in the
 
 - The mode list opens picker pages that save the role of ▼ (voice key / down ↓) and the
   computer key the voice key holds (Fn, left/right Control, left/right Command,
-  left/right Option).
+  left/right Option). An unsaved voice key defaults to right Command, which macOS
+  accepts from third-party keyboards; a saved choice is kept.
 - Fn uses an Apple vendor report; if that report map makes HID initialization fail,
   firmware falls back to the base map and the UI suggests Command.
 - The ESP32-C3 only has BLE and no Classic Bluetooth headset profile, so the device
