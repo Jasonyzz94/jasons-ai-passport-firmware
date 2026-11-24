@@ -456,15 +456,26 @@ static int direct_asr(char *text, size_t len)
     const int64_t started = sys_now_ms();
     uint8_t blk[ADPCM_BLOCK_BYTES];
     size_t blk_fill = 0;   // 流缓冲是字节流:攒满一整块再发
-    int sent = 0;          // 已发的块数
+    int sent = 0;          // 已发(或已攒进 up)的块数
+    // 攒够 UP_BLOCKS 块再发:以前每 132 字节就单独加密发送一次(C3 上每次都要加密、申请缓冲),
+    // 网络稍慢就积压,松手后还要把积压的和补齐的静音(最多约 750 次)一次次发完,要等好几秒。
+    enum { UP_BLOCKS = 16 };   // 约 2KB / 0.26 秒音频
+    uint8_t *up = malloc(UP_BLOCKS * ADPCM_BLOCK_BYTES);
+    size_t up_fill = 0;
+    if (!up) ok = false;
     while (ok && sent < DIRECT_MAX_BLOCKS) {
         const size_t n = xStreamBufferReceive(s_stream, blk + blk_fill, sizeof(blk) - blk_fill,
                                               pdMS_TO_TICKS(40));
         blk_fill += n;
         if (blk_fill == sizeof(blk)) {
-            ok = write_all(c, blk, sizeof(blk));
+            memcpy(up + up_fill, blk, sizeof(blk));
+            up_fill += sizeof(blk);
             sent++;
             blk_fill = 0;
+            if (up_fill == UP_BLOCKS * ADPCM_BLOCK_BYTES) {
+                ok = write_all(c, up, up_fill);
+                up_fill = 0;
+            }
         }
         track_level();
         if (s_cancel) break;
@@ -476,12 +487,17 @@ static int direct_asr(char *text, size_t len)
     audio_capture_stop();
     drop_stream();   // 对话和朗读还要各握手一次:把录音缓冲还回去
     if (!s_cancel) s_state = AI_THINKING;   // 补齐静音时界面已显示"思考中"
-    // 用静音块补齐到声明的长度(块头预测值 0、步长 0、全零半字节 = 一直是 0)
-    static const uint8_t silent[ADPCM_BLOCK_BYTES];
+    if (ok && !s_cancel && up_fill) ok = write_all(c, up, up_fill);   // 还没发的最后一批
+    // 用静音块补齐到声明的长度。静音块全是 0(块头预测值 0、步长 0、半字节 0 = 一直是 0),
+    // 所以直接按 2KB 一次发 0。
+    if (up) memset(up, 0, UP_BLOCKS * ADPCM_BLOCK_BYTES);
     while (ok && !s_cancel && sent < DIRECT_MAX_BLOCKS) {
-        ok = write_all(c, silent, sizeof(silent));
-        sent++;
+        int k = DIRECT_MAX_BLOCKS - sent;
+        if (k > UP_BLOCKS) k = UP_BLOCKS;
+        ok = write_all(c, up, (size_t)k * ADPCM_BLOCK_BYTES);
+        sent += k;
     }
+    free(up);
     if (ok && !s_cancel) ok = write_all(c, tail, sizeof(tail) - 1);
     int status = s_cancel ? ASR_CANCELLED : VOICE_ERR_UPLOAD;
     static char resp[768];
